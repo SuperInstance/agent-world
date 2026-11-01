@@ -28,6 +28,19 @@ const { pathfinder: pathfinderPlugin, Movements, goals } = require('mineflayer-p
 const TICK_MS = 50; // a Minecraft tick is 1/20 s
 
 /**
+ * The faces a block may be placed against, in order of preference: on
+ * top of the ground first, a wall beside it next, under a ceiling last.
+ */
+const FACES = [
+  new Vec3(0, 1, 0),
+  new Vec3(1, 0, 0),
+  new Vec3(-1, 0, 0),
+  new Vec3(0, 0, 1),
+  new Vec3(0, 0, -1),
+  new Vec3(0, -1, 0),
+];
+
+/**
  * Teach a bot to walk.
  *
  * mineflayer-pathfinder is a plugin now: `bot.loadPlugin(pathfinder)`
@@ -74,19 +87,38 @@ async function gotoNear(bot, x, y, z, distance = 2, timeout = 20000) {
   }
 }
 
+/** What a tree is made of: the spawn column may be inside one. */
+const CANOPY = new Set([
+  'oak_leaves', 'birch_leaves', 'spruce_leaves', 'jungle_leaves',
+  'acacia_leaves', 'dark_oak_leaves', 'cherry_leaves', 'azalea_leaves',
+  'flowering_azalea_leaves', 'mangrove_leaves', 'pale_oak_leaves',
+]);
+
 /**
  * Where the community's depot is.
  *
  * The world spawn: every builder appears there and every builder can
- * find it, without anyone telling them where it is.
+ * find it, without anyone telling them where it is. The spawn point
+ * itself can be up in a tree's canopy (the spawn packet names a column,
+ * not a floor), so the depot is the first solid ground in that column
+ * from the top down that is not part of a tree — leaves and trunks are
+ * skipped, so the depot is where a builder can stand, whatever grows
+ * above it.
  */
 function depotSpot(bot) {
   const spot = bot.spawnPoint || bot.entity.position;
-  return {
-    x: Math.floor(spot.x),
-    y: Math.floor(spot.y),
-    z: Math.floor(spot.z),
-  };
+  const x = Math.floor(spot.x);
+  const z = Math.floor(spot.z);
+  const start = Math.floor(spot.y);
+  const air = (block) =>
+    !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
+  const tree = (block) => CANOPY.has(block.name) || block.name.endsWith('_log');
+  for (let y = start + 8; y >= start - 24; y--) {
+    const block = bot.blockAt(new Vec3(x, y, z));
+    if (!block || air(block) || tree(block)) continue;
+    return { x, y: y + 1, z };
+  }
+  return { x, y: start, z };
 }
 
 /** The vocabulary: the words a skill may use, and what they do. */
@@ -132,8 +164,29 @@ function buildApi(bot, counters) {
       const q = query || {};
       const names = q.names || (q.name ? [q.name] : null);
       const maxDistance = q.max_distance || q.maxDistance || 32;
+      const feet = bot.entity.position.floored();
+      // A block the builder cannot stand next to is not a block it can
+      // work on: a log five blocks up a tree is found, aimed at and
+      // then not mined, because the server refuses a dig that is out of
+      // reach. So the candidates are the ones at the builder's own
+      // level, unless the query asks for any level.
+      const anyLevel = q.any_level === true;
       const found = bot.findBlock({
-        matching: (block) => (names ? names.includes(block.name) : block.name !== 'air'),
+        matching: (block) => {
+          // The search calls its matcher with half-made blocks — registry
+          // entries with no position — and one of those is not a block
+          // the builder can walk to. The level filter below reads
+          // `position.y`, so a block without a position is refused here,
+          // first, or every search dies on the first candidate.
+          if (!block || !block.position) return false;
+          if (names) {
+            if (!names.includes(block.name)) return false;
+          } else if (block.name === 'air') {
+            return false;
+          }
+          if (anyLevel) return true;
+          return Math.abs(block.position.y - feet.y) <= 2;
+        },
         maxDistance,
       });
       if (!found) return null;
@@ -165,6 +218,9 @@ function buildApi(bot, counters) {
         // lands at the bot's feet either way.
       }
       await new Promise((resolve) => setTimeout(resolve, 300));
+      // Toss looking up: a drop thrown forward lands two blocks from
+      // the depot and rolls, and the taker's small ring may miss it.
+      await bot.lookAt(bot.entity.position.offset(0, 6, 0), true);
       await bot.toss(item, null, wanted);
       return { ok: true, detail: `left ${wanted} ${name} at the depot` };
     },
@@ -196,7 +252,8 @@ function buildApi(bot, counters) {
     },
     find_chest: () => {
       const found = bot.findBlock({
-        matching: (block) => block.name === 'chest' || block.name === 'trapped_chest',
+        matching: (block) =>
+          !!block && (block.name === 'chest' || block.name === 'trapped_chest'),
         maxDistance: 32,
       });
       if (!found) return null;
@@ -225,6 +282,20 @@ function buildApi(bot, counters) {
         await approach(bot, block.position);
         await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
         await bot.dig(block);
+        // The dig is a packet, not a promise: the server refuses one
+        // that is out of reach, and mineflayer does not notice. So the
+        // builder looks at the block afterwards and says so when it is
+        // still there. A dig that silently did nothing is how a
+        // builder "mines" for hours and carries nothing.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const still = blockAt(
+          block.position.x,
+          block.position.y,
+          block.position.z
+        );
+        if (still && still.name === block.name) {
+          return { ok: false, detail: `the ${block.name} did not break` };
+        }
         counters.mined += 1;
         // The block is broken but the item is on the ground: walk onto
         // it so it is actually collected. Otherwise a builder "mined"
@@ -242,13 +313,40 @@ function buildApi(bot, counters) {
     place: async (name, x, y, z) => {
       const item = bot.inventory.items().find((i) => i.name === name);
       if (!item) return { ok: false, detail: `the bot has no ${name}` };
-      const blockType = registry.blocksByName[name];
-      if (!blockType) return { ok: false, detail: `there is no block called ${name}` };
-      const position = new Vec3(x, y, z);
+      const position = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+      const target = bot.blockAt(position);
+      if (
+        target &&
+        target.name !== 'air' &&
+        target.name !== 'cave_air' &&
+        target.name !== 'void_air'
+      ) {
+        return { ok: false, detail: `there is already a ${target.name} there` };
+      }
+      // mineflayer does not place a block at a point; it places against
+      // a neighbour's face. So the neighbour is found — the ground under
+      // the target first, then a wall beside it — and the face is the one
+      // that points at the target.
+      let reference = null;
+      let face = null;
+      for (const direction of FACES) {
+        const neighbour = bot.blockAt(position.minus(direction));
+        if (
+          neighbour &&
+          neighbour.boundingBox !== 'empty' &&
+          neighbour.name !== 'air'
+        ) {
+          reference = neighbour;
+          face = direction;
+          break;
+        }
+      }
+      if (!reference) return { ok: false, detail: 'there is nothing to build against there' };
       try {
         await approach(bot, position);
         await bot.equip(item, 'hand');
-        await bot.placeBlock(blockType, position);
+        await bot.lookAt(position.offset(0.5, 0.5, 0.5), true);
+        await bot.placeBlock(reference, face);
         counters.placed += 1;
         return { ok: true, detail: `placed ${name}` };
       } catch (err) {
@@ -310,7 +408,7 @@ function buildApi(bot, counters) {
           openChest = null;
         }
         const block = bot.findBlock({
-          matching: (b) => b.name === 'chest' || b.name === 'trapped_chest',
+          matching: (b) => !!b && (b.name === 'chest' || b.name === 'trapped_chest'),
           maxDistance: 32,
         });
         if (!block) return { ok: false, detail: 'there is no chest nearby' };
@@ -357,7 +455,9 @@ function buildApi(bot, counters) {
 /** Walk next to a block, if the bot is not close enough to work on it. */
 async function approach(bot, position) {
   const distance = bot.entity.position.distanceTo(position);
-  if (distance <= 4) return;
+  // Two blocks, not four: the server refuses a dig from further than
+  // the builder's reach, and the drop is only picked up from close by.
+  if (distance <= 2) return;
   try {
     await gotoNear(bot, position.x, position.y, position.z, 2, 12000);
   } catch (err) {

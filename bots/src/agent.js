@@ -403,6 +403,14 @@ class Agent {
 }
 
 // The names the world owns. A player who is not one of these is a human.
-const AGENT_NAMES = new Set(['Pebble', 'Timber', 'Kite', 'Sprout']);
+// The watcher is the spectator the viewer page joins as, and the probes
+// are the world's own diagnostics: none of them is a person, and reading
+// them as one would tell the mediator a human had joined whenever
+// somebody opened the world's window.
+const AGENT_NAMES = new Set([
+  'Pebble', 'Timber', 'Kite', 'Sprout',
+  'Watcher',
+  'Probe', 'Probe2', 'Probe3', 'Probe4', 'Probe5', 'Probe6',
+]);
 
 module.exports = { Agent, ROLES, AGENT_NAMES };

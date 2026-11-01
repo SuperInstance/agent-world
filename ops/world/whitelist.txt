@@ -13,3 +13,9 @@ Pebble
 Timber
 Kite
 Sprout
+
+# --- the world's own eyes ---
+# The browser view joins as Watcher. It is a spectator: it stands at the
+# depot and looks.
+Watcher
+Probe5
