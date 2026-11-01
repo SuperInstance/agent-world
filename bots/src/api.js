@@ -28,6 +28,34 @@ const { pathfinder: pathfinderPlugin, Movements, goals } = require('mineflayer-p
 const TICK_MS = 50; // a Minecraft tick is 1/20 s
 
 /**
+ * Find the nearest block of the given names, searching by block id.
+ *
+ * mineflayer's search has two paths. A function matcher makes it scan
+ * the neighbourhood block by block — and that scan has a budget it
+ * spends on the canopy around a builder standing in a tree before it
+ * ever reaches the ground, so "no stone within 24 blocks" on a stone
+ * mountainside (probe7). A list of block ids makes it ask each chunk's
+ * own type index instead, which has no budget to spend and finds the
+ * same blocks whatever is overhead. So the names are resolved to ids
+ * and the level filter — a block the builder cannot reach is not a
+ * block it can work on — is applied to the results.
+ */
+function findByIds(bot, registry, names, maxDistance, feet, anyLevel) {
+  const ids = [];
+  for (const name of names) {
+    const block = registry.blocksByName[name];
+    if (block) ids.push(block.id);
+  }
+  const spots = bot.findBlocks({ matching: ids, maxDistance, count: 96 });
+  for (const spot of spots) {
+    if (!anyLevel && Math.abs(spot.y - feet.y) > 2) continue;
+    const block = bot.blockAt(spot);
+    if (block) return block;
+  }
+  return null;
+}
+
+/**
  * The faces a block may be placed against, in order of preference: on
  * top of the ground first, a wall beside it next, under a ceiling last.
  */
@@ -171,24 +199,22 @@ function buildApi(bot, counters) {
       // reach. So the candidates are the ones at the builder's own
       // level, unless the query asks for any level.
       const anyLevel = q.any_level === true;
-      const found = bot.findBlock({
-        matching: (block) => {
-          // The search calls its matcher with half-made blocks — registry
-          // entries with no position — and one of those is not a block
-          // the builder can walk to. The level filter below reads
-          // `position.y`, so a block without a position is refused here,
-          // first, or every search dies on the first candidate.
-          if (!block || !block.position) return false;
-          if (names) {
-            if (!names.includes(block.name)) return false;
-          } else if (block.name === 'air') {
-            return false;
-          }
-          if (anyLevel) return true;
-          return Math.abs(block.position.y - feet.y) <= 2;
-        },
-        maxDistance,
-      });
+      let found = null;
+      if (names) {
+        found = findByIds(bot, registry, names, maxDistance, feet, anyLevel);
+      } else {
+        // Any block at all: the name-less search keeps the function
+        // matcher, which scans the neighbourhood itself.
+        found = bot.findBlock({
+          matching: (block) => {
+            if (!block || !block.position) return false;
+            if (block.name === 'air') return false;
+            if (anyLevel) return true;
+            return Math.abs(block.position.y - feet.y) <= 2;
+          },
+          maxDistance,
+        });
+      }
       if (!found) return null;
       return {
         x: found.position.x,
@@ -251,11 +277,14 @@ function buildApi(bot, counters) {
       return { ok: false, count: before, detail: `the depot has no ${name}` };
     },
     find_chest: () => {
-      const found = bot.findBlock({
-        matching: (block) =>
-          !!block && (block.name === 'chest' || block.name === 'trapped_chest'),
-        maxDistance: 32,
-      });
+      const found = findByIds(
+        bot,
+        registry,
+        ['chest', 'trapped_chest'],
+        32,
+        bot.entity.position.floored(),
+        true
+      );
       if (!found) return null;
       return { x: found.position.x, y: found.position.y, z: found.position.z };
     },
@@ -407,10 +436,14 @@ function buildApi(bot, counters) {
           openChest.close();
           openChest = null;
         }
-        const block = bot.findBlock({
-          matching: (b) => !!b && (b.name === 'chest' || b.name === 'trapped_chest'),
-          maxDistance: 32,
-        });
+        const block = findByIds(
+          bot,
+          registry,
+          ['chest', 'trapped_chest'],
+          32,
+          bot.entity.position.floored(),
+          true
+        );
         if (!block) return { ok: false, detail: 'there is no chest nearby' };
         await approach(bot, block.position);
         openChest = await bot.openContainer(block);
