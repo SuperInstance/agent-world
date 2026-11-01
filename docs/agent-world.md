@@ -1,0 +1,350 @@
+# agent-world — how it works
+
+A Minecraft world on the Thor with four builders living in it, and the
+three minds that make them work: a **reflex** that decides, a **canon**
+that remembers, and a **mediator** that improves the options while the
+world runs.
+
+This document explains the mechanisms. It does not claim anything; the
+numbers at the end are what was measured, with the state of the box
+beside them.
+
+---
+
+## 1. The box
+
+The Thor (Jetson AGX Thor, aarch64, 122 GB unified memory, 14 cores) is
+shared with the other seats of the project, and it is busy. The world's
+standing on that box is therefore a deliberate one:
+
+| | |
+|---|---|
+| Paper 26.1.2 build 74 | the world itself; Java 25 (Temurin, aarch64 tarball, local directory) |
+| heap | `-Xms2G -Xmx6G`, at `nice 10` |
+| memory floor | the world does not start, and the builders stand aside, while the box has **less than 25 GB free** |
+| the heavy lock | **not taken by the world.** It is taken only while the decision model loads (`ops/run-d1.sh`) |
+
+The 25 GB floor is the rule that came out of the 13:22 OOM, and the
+lock is the stopgap that came with it. The world applies the rule
+directly rather than the stopgap, because the stopgap is a poor
+instrument for a resident service: one long generation sweep on
+another seat would otherwise freeze the world for an hour even though
+the world uses 2 GB and runs at `nice 10`.
+
+### The addresses
+
+| what | where | protocol |
+|---|---|---|
+| Minecraft Java | 192.168.0.78:25565 | TCP |
+| Minecraft Bedrock (Geyser + Floodgate) | 192.168.0.78:19132 | UDP |
+| the 3D view | http://192.168.0.78:8080/ | HTTP |
+| the text view | http://192.168.0.78:8080/ascii | HTTP |
+| the reflex (internal) | 127.0.0.1:8110 | HTTP, loopback only |
+| the decision model | 192.168.0.78:8094 | HTTP (d1-2B, `llama-server`) |
+
+The server binds `192.168.0.78`, never `0.0.0.0`. There is no host
+firewall on the box (no `ufw` binary, and the seat has no sudo session),
+so "LAN-only" rests on the router's NAT as well as on the bind address;
+that is a fact about the box, not a claim about the world.
+
+### The door
+
+The server runs in **offline mode** with a **whitelist**. That is the
+trade Casey chose for a LAN-only world: the four builders need no
+Minecraft accounts of their own, and the price is that anyone on the
+LAN can claim any name — so the whitelist is what actually keeps the
+door shut. Paper keys its whitelist by UUID, and in offline mode that
+UUID is derived from the name, so the whitelist is applied through the
+server's own `whitelist add` command. `ops/world/whitelist.txt` is the
+intent; every start re-applies it, and a name in the server that is
+not in the file is removed.
+
+---
+
+## 2. The three minds
+
+From `docs/design/three-minds.md`: the reflex is fast and has no
+authority; the canon is the one history; the mediator is the reflective
+mind that improves the system while it runs. Here is each one, in this
+world.
+
+### The reflex — `reflex/`
+
+Every two seconds each builder tells the reflex what it can see and
+what it needs. The reflex does three things:
+
+1. **It filters.** The skill library is the source of the options; a
+   skill whose preconditions do not hold in this context is not an
+   option at all, and a context with no eligible skill is a refusal
+   with a named reason — never a fallback to some other skill.
+2. **It asks.** The eligible options go to the decision model as **one
+   pack**, one question per builder, over one shared description of
+   the world. The pack is the reason four builders cost one model call
+   rather than four.
+3. **It chooses.** The answer comes back as a probability per option.
+   That probability is the **cold-start prior**; the learned estimate
+   washes it out as the record grows (§4).
+
+The decision model is **d1-2B**, served once on the Thor and shared.
+It is reached through **builder-ide's judge** (`core/judge`), which is
+where the confidence gate, the escalation ladder and the attempt log
+live. Every ask is recorded as a `judge.verdict` row, including the
+refusals. When the model cannot be reached at all, the world falls
+back to the bandit's own prior and says so — the world keeps working;
+the log says what happened.
+
+### The canon — the log
+
+One SQLite file (`runtime/world-ledger.sqlite3`), the closed event set
+from `core-spec` §1.8, and the **tile** event types, because in this
+world a skill *is* a tile: the cloud writes the options, the Thor
+learns which ones work.
+
+| event | when |
+|---|---|
+| `tile.authored` | a skill enters the library |
+| `tile.played` | a skill is used, with its outcome and its context |
+| `tile.retired` | a skill leaves the eligible set, with the reason |
+| `tile.retrained` | the chooser was refit from the log |
+| `judge.verdict` | every ask of the decision model, including the refused ones |
+
+The library and the chooser's statistics are **folds over this log**, so
+a restart loses nothing and a replay gives the same answer. The
+builders' own log (`runtime/logs/bots.jsonl`) holds the same decisions
+in the order they happened, and holds **nothing about a human**: no
+chat, no audio, no transcript. That is a rule, not an intention — the
+log format has nowhere to put it.
+
+### The mediator — `reflex/agent_world_reflex/mediator.py`
+
+The mediator watches and, **only when the sign fades**, writes new
+skills.
+
+The **sign** is two readings of the recent window of play records: the
+failure rate, and the slope of the decision model's confidence. While
+the sign holds, the mediator makes **no model call at all** — it logs
+and it waits. Intervening during a groove that is working would add
+latency, cost and second-guessing.
+
+It steps in on two triggers:
+
+1. the sign faded (failures above half, or failures rising, or
+   confidence sliding);
+2. a human joined the world.
+
+Then, for each family that is losing, it builds a **feedback packet** —
+deliberately blunt: what it lost, where it lost, how many times, what
+it used — and asks a cloud model (Groq's `gpt-oss-120b` through
+`~/lm-tools/gq.py`) for a better skill. The new skill is held to the
+**same door** as everything else, and a refusal goes back to the author
+with its reason, so the next attempt is a better one.
+
+That is the anti-GAN: the learner improves by joining, not by losing
+against an adversary. The room answers, and the answer becomes the
+next phrase.
+
+---
+
+## 3. The skills, and the door
+
+A **skill** is a small JavaScript function over the mineflayer API.
+It is a tile in every other respect:
+
+- **content addressed** — `skill_<12 hex>` over the canonical body, so
+  the same script written twice is the same skill;
+- **versioned per family** — a family is one job ("mine stone and leave
+  it at the depot"), and the library assigns the version;
+- **never deleted** — a skill leaves the eligible set by being
+  **retired**, with a reason and a timestamp. Its body, its plays and
+  its history stay, and it is still the answer to "why did this lose?";
+- **the latest version of a family is the live one** — when a new
+  version is admitted, the older versions of that family are retired
+  with the reason "superseded by ...".
+
+### The vocabulary
+
+The world's vocabulary is closed. A skill may only use these words:
+
+```
+observe:  position, health, food, time_of_day, light, inventory,
+          inventory_count, block_at, find_block, find_chest,
+          nearby_players, look_at
+act:      dig, place, move_to, equip, craft, attack, wait,
+          open_chest, deposit, withdraw,
+          depot, leave_at_depot, take_from_depot
+```
+
+Three checks, in order of strength:
+
+1. **no escapes** — `require`, `process`, `globalThis`, `fetch`,
+   `eval`, `Function`, `constructor`, `__proto__` and the rest are
+   refused **by name**, before anything else is looked at;
+2. **no unknown words** — every function the skill calls is either a
+   word of the vocabulary or a name the skill itself declared. A skill
+   that reaches for a word the world does not have is not a skill with
+   a bad word in it, it is not a skill;
+3. **it parses** — the body is compiled by Node's own parser, and a
+   refusal carries the parser's message.
+
+And at run time there is a fourth door: the skill runs in a `vm`
+context that has no `require`, no `process`, no `Buffer`, no `console`,
+no `eval` and no `new Function` (string code generation is off). The
+API wrappers are built *inside* the context, so even reaching for
+their `constructor` lands in the sandbox's realm and not the host's.
+
+**The low-level work stays in mineflayer's own planners.** A skill
+says *what* to do ("mine that oak log"); `mineflayer-pathfinder` works
+out how to get there and `bot.dig` does the mining. The reflex chooses
+the decision, not the footsteps.
+
+### The measure
+
+"Win" is not one thing, so the record says which one it is. This world
+writes the first of the three measures in `tiles.md`:
+
+| measure | what it means |
+|---|---|
+| `sealed_prediction` | the skill declared what it expected to change, and the world checked it |
+| `owner_keep` / `owner_undo` | Casey kept or undid the work (for the day he watches) |
+| `critic` | a critic's verdict on the result (not implemented yet) |
+
+So every skill carries a prediction:
+
+```json
+"predict": {"kind": "inventory_delta", "item": "cobblestone", "min": 1}
+```
+
+and the kinds are `inventory_delta`, `block_placed`, `block_broken`,
+`moved_to` and `none`. A skill that makes no measurable effect is
+recorded as **partial** — it ran, but it cannot be called a win or a
+loss, and it says so.
+
+The context travels with the play, because a play without its context
+cannot be learned from: it is the difference between a contextual bandit
+and a lookup table. The context carries the role, the phase (day or
+night), the health and food, whether the builder is holding material,
+whether a human is near, and the confidence the decision model gave.
+
+---
+
+## 4. The chooser
+
+Two things know how to pick, and they are combined in
+`reflex/agent_world_reflex/chooser.py`:
+
+- **the decision model** (d1-2B), which is the reflex: it runs in tens
+  of milliseconds and it is the only thing that runs on every tick;
+- **the learned estimate**, a contextual bandit over (context bucket,
+  skill) — builder-ide's own `core/tiles/chooser.py`, with its
+  ε-greedy exploration, its posterior mean and its propensity
+  arithmetic.
+
+How they are combined is the rule the tiles seat already uses: **the
+judge is the cold-start prior**. Where the bandit has no observation
+of a skill in this bucket, the judge's probability stands where a flat
+prior stood; as real plays arrive, the learned estimate washes the
+prior out at the rate the bandit's prior count sets:
+
+```
+w = prior / (plays + prior)          # 1 for a skill nobody has played
+score = (1 - w) * learned + w * judge # w -> 0 as the record grows
+```
+
+Nothing is thrown away: the judge's answer is in the log, the
+propensity is measured **at the choice** (it cannot be reconstructed
+afterwards, because the exploration rate decays and the greedy arm
+moves), and the candidates the choice was made from travel with the
+play record — so the log stays off-policy evaluable.
+
+---
+
+## 5. Presence
+
+The Thor's finite resource is time, and the world's standing on a busy
+box has to be honest about it:
+
+- the world is **resident**: it runs whether or not anyone is watching,
+  and it keeps working when Casey goes to bed;
+- it is **low priority**: `nice 10`, a 6 GB heap, and it never takes the
+  heavy lock;
+- it **yields on the rule, not on the lock**: while the box has less
+  than 25 GB free, the builders do not act, and the log says so
+  ("yielded: the box has N GB free; the rule is 25 GB");
+- the **decision tick is light** and never takes the lock. The one
+  heavy step the world has — loading the decision model — takes the
+  lease only while it loads, and releases it the moment the model
+  answers (`ops/run-d1.sh`).
+
+So live work pre-empts the world without being blocked by it, and the
+world's cost to the rest of the box is bounded and visible.
+
+---
+
+## 6. The two views
+
+Both are projectors of the same world, in different media.
+
+**The 3D view** (`/`) is prismarine-viewer: the world as a spectator
+sees it, with the builders in it. A "Watcher" joins the world for it —
+a spectator that stands at the depot and needs no account of its own.
+
+**The text view** (`/ascii`) is the Syzygy-style projection: one
+perspective, projected into characters by a kernel with two properties
+the 3D view does not need —
+
+- **integer**: the whole projection is integer arithmetic over a fixed
+  cosine table, so no floating point creeps in through trigonometry;
+- **deterministic**: no clock, no randomness. The same world state
+  always gives the same characters, so two readers of the same state
+  read the same thing, byte for byte.
+
+The kernel is a small raycaster: one ray per cell, marching in integer
+steps, taking the first block it meets, and rendering it as a glyph.
+It is not a renderer; it is the same information in a medium a person
+can read at a glance and a decision model can read exactly.
+
+---
+
+## 7. What it does not do yet
+
+- **no owner measure yet.** `owner_keep` and `owner_undo` are in the
+  schema and are not written; the day Casey watches, a human's undo
+  should be a measure like any other.
+- **no critic.** The `critic` measure is not written.
+- **the learned ranker and RL rungs** are not built: the bandit is the
+  floor, and the floor is what everything else has to beat.
+- **the night retrain** is in the mediator's shape (refit, rank,
+  retire, feedback packets) but runs on demand (`ops/bots.sh
+  mediate`), not on a clock.
+- **the perception spec** — "the mediator authors the perception spec,
+  as data, for its fleet" — is not built. The context the builders
+  send today is a fixed set of keys.
+- **Luanti is not built.** The brief puts it in a later re-engineering
+  phase; what would have to be rebuilt there is written down in
+  [`luanti-later.md`](luanti-later.md) and nothing was built for it.
+
+---
+
+## 8. The numbers
+
+Measured on the Thor (aarch64, 122 GB unified memory), with the box
+state beside each number. The box was **shared and busy** during the
+measurement: other seats were running generation jobs, so the load
+average was above the core count, and the world's own numbers are
+therefore a *worst case* rather than a best one.
+
+*(filled in from `ops/bots.sh report` and the world log — see the
+commit message for the run these came from)*
+
+---
+
+## 9. The trade-offs, stated plainly
+
+| the trade | why | the price |
+|---|---|---|
+| offline mode | the builders need no accounts | anyone on the LAN can claim a name; the whitelist is the door |
+| Paper 26.1.2, not 26.3 | 26.1 is the newest protocol mineflayer speaks | Casey's client must be 26.1; the launcher installs it beside the newer one |
+| Java 25, not the brief's 21 | Paper 26.1 refuses to start on anything older | the 1.21.x line (which wants Java 21) is one line away in `ops/env.sh`, and both JDKs are installed |
+| the ground depot, not a chest | a chest needs a crafting table, which needs planks, which needs the thing the chest would hold | items are picked up by walking over them, which is a little less tidy than a chest |
+| the builders act every 2 s | a tick is a question, and the question is the expensive part | the world's reaction time is seconds, not milliseconds |
+| no chat, ever | the kids' privacy rule | the builders cannot talk to Casey, and nothing anyone says is stored |
