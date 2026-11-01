@@ -88,6 +88,8 @@ ops/paper.sh status        # is it up, on what port, how much memory
 ops/paper.sh logs 40       # the server's log
 ops/paper.sh console       # the server console
 ops/paper.sh stop          # save and stop, cleanly (about a second)
+
+ops/check-views.sh         # do the three pages really work? (a real browser)
 ```
 
 They all run in one tmux session (`agent-world`), one window each:
@@ -139,6 +141,16 @@ their own Paper-side exemption.
 less than 25 GB free — the rule that came out of the 13:22 OOM. It does
 not take the heavy lock, because it is not a heavy step; the lock is
 taken only while the decision model loads.
+
+**The 3D view draws the world as 1.21.4.** The world runs Minecraft 26.1;
+the newest prismarine-viewer has assets only up to 1.21.4, and its
+browser bundle cannot even name 26.1 (it says "null is not supported"
+and shows nothing). So the server re-encodes the block states on their
+way to the page — 26.1 → 1.21.4, by block name and properties — and the
+page says so on a strip: which version it draws, and which blocks in
+view have no 1.21.4 twin and are drawn as a stand-in. The world itself
+is untouched: the builders and the skills still speak 26.1. The details
+are in [`docs/agent-world.md`](docs/agent-world.md#the-3d-view-draws-a-version-the-browser-has).
 
 **No chat and no audio is stored.** The world's log holds decisions and
 outcomes: what a builder chose, what it did, whether the prediction

@@ -298,6 +298,77 @@ All of them are projectors of the same world, in different media.
 sees it, with the builders in it. A "Watcher" joins the world for it —
 a spectator that stands at the depot and needs no account of its own.
 
+### The 3D view draws a version the browser has
+
+The world runs **Minecraft 26.1**. The browser's 3D view cannot draw it.
+
+prismarine-viewer 1.33.0 is the newest published build, and its assets
+(textures, block models) and the minecraft-data tables inside its browser
+bundle stop at **1.21.4**. Its version lookup answers `null` for `26.1`
+— `26.1` is not a major.minor it knows — so the page says **"null is not
+supported"** and draws nothing. Casey saw that on the morning of
+2026-11-01: a blank canvas.
+
+Relabelling the version is not enough. Blocks added since 1.21.4 shift
+the global block-state ids, so the chunks would decode into the wrong
+blocks. So the translation happens **on the server**, where minecraft-data
+has both versions (`viewer/src/translate.js`):
+
+```
+26.1 state id  →  (block name, properties)  →  1.21.4 state id
+```
+
+Every chunk palette and every block update is re-encoded on its way to
+the page, and the page is told `1.21.4`. The world is not changed: the
+builders, the skills and the reflex all still speak 26.1. Only the bytes
+on their way to the browser are re-encoded.
+
+Three kinds of palette container exist in a chunk — the usual `indirect`
+one (a list of states and a bit array of indexes), `single` (one state
+for a whole section) and `direct` (the bit array holds the states
+themselves) — and all three are re-encoded. A palette keeps its length,
+so the bit array that indexes into it still means the same thing.
+
+**What is approximated, and said out loud.** The page carries a strip
+that says how the world is being drawn:
+
+> agent-world · Minecraft 26.1 drawn as 1.21.4 — 1 block has no 1.21.4
+> twin (iron_chain → chain) · the text view · the voices · the status
+
+- **74 blocks** exist in 26.1 and not in 1.21.4 (the copper furniture,
+  the shelves, the ground cover of 26.1). Each is drawn as the nearest
+  block 1.21.4 has, from an explicit table
+  (`viewer/src/fallback-blocks.js`), and the count of those actually in
+  view is on the page.
+- **One block** keeps its name but gains a value: 26.1's note block can
+  be a copper trumpet, which 1.21.4 has no note block for. The bell is
+  drawn instead.
+- **One block** renamed a property: the creaking heart says what state
+  it is in now, where 1.21.4 said whether it was creaking.
+
+`ops/check-translation.js` checks all of that without a browser: every
+26.1 state id lands on a state id of the same block (or of its
+documented stand-in), the properties survive the round trip, the
+stand-ins are real 1.21.4 blocks, and a chunk keeps its shape.
+
+**The page never goes blank.** If the version cannot be drawn at all,
+the page says so in words and points at the text view, instead of
+showing an empty canvas.
+
+**The mobs the browser has no model for are left out.** prismarine-viewer
+has models for 94 mobs; an axolotl is not one of them. Rather than draw
+it as a magenta box and say so in the console, the server leaves it out.
+Players are drawn as players, with their name above them.
+
+### The check
+
+`ops/check-views.sh` drives a real browser over all three pages and
+checks, per page: no page errors, nothing saying a version is not
+supported, no failed requests, and — for the 3D view — that the canvas
+holds more than one colour and that the page says how the world is being
+drawn. A 200 with live frames would not have caught the blank canvas;
+the pixels do. Run it after any change to the viewer.
+
 **The text view** (`/ascii`) is the Syzygy-style projection: one
 perspective, projected into characters by a kernel with two properties
 the 3D view does not need —
