@@ -140,3 +140,18 @@ generation sweep and two zcode seats ran throughout; free memory 45–86 GB.
 
 See `docs/playtest-2026-11-01-reward.md` for the numbers of the one-hour
 re-run.
+
+## The hour, measured (22:53 UTC)
+
+- The window 21:53–22:53 UTC: farmer.ground 270 of 271 wins,
+  gatherer.stone 164 of 165, scout.ground 20 plays with rewards
+  {0.0, 1.0} — its first win ever ("moved 25.2 blocks (wanted 20)",
+  22:03:26Z) — and the survey's 1,564 plays all unscored. Judge
+  1,828 calls, 0 failures, mean 58.4 ms, on the world's own serve
+  (port 8094). Estimates moved on evidence: farmer.ground night
+  0.005 → 0.251, gatherer.stone night 0.282 → 0.361.
+- Still broken, on purpose of the design: builder.wall 19 plays, 0
+  wins ("the wall could not grow" — a placement problem for the
+  mediator), and the scout walks lose 19 of 20 in the forest.
+- The playtest note with the whole story:
+  docs/playtest-2026-11-01-reward.md.

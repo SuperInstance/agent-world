@@ -524,6 +524,25 @@ was not standable — see the commits of 2026-11-01):
 
 The sign, read by the mediator at 10:26: **the sign holds.**
 
+**The reward playtest, 2026-11-01 21:53–22:53 UTC** — after the
+constant-reward fix (§3); the box rebooted at ~20:00 UTC and the world
+came back at 20:06; two other seats ran throughout; free memory
+45–76 GB. The full finding, the three defects under it, and the fixes
+are in [`playtest-2026-11-01-reward.md`](playtest-2026-11-01-reward.md);
+the hour:
+
+| skill | family | plays | wins | distinct rewards |
+|---|---|---|---|---|
+| farmer.ground | farmer.ground | 271 | 270 | 0.0, 1.0 |
+| gatherer.stone | gatherer.stone | 165 | 164 | 0.0, 1.0 |
+| scout.ground | scout.ground | 20 | 1 (moved 25.2 blocks) | 0.0, **1.0** — varies |
+| scout.sight | scout.sight | 1,564 | — | 1,564 plays, all unscored — no 0.5 anywhere |
+
+The judge answered 1,828 packs with 0 failures (mean 58.4 ms). Before
+the fix the same box had gone three hours with zero wins in any
+family and a survey skill at reward exactly 0.5 on every one of its
+18,066 plays.
+
 **The build**: the wall east of the depot — the one artifact every
 hand is in — laid its first blocks at 10:24, three in its first two
 plays, and grows at the pace of the depot it is fed from (each of
