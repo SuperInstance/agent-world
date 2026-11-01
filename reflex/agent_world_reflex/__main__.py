@@ -50,7 +50,7 @@ def cmd_serve() -> int:
         port=int(os.environ.get("AW_D1_PORT", "8094")),
         ledger=ledger,
     )
-    service = ReflexService(library=library, chooser=chooser, model=model)
+    service = ReflexService(library=library, chooser=chooser, model=model, ledger=ledger)
     host = os.environ.get("AW_REFLEX_HOST", "127.0.0.1")
     port = int(os.environ.get("AW_REFLEX_PORT", "8110"))
     server = serve(service, host=host, port=port)
