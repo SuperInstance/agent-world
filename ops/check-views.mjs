@@ -165,26 +165,18 @@ console.log(`  shot   ${shotPath}`);
 if (notes.length) {
   for (const note of notes) console.log(`  note   ${note}`);
 }
-// The one console error that is known and harmless: three.js computes a
-// NaN bounding radius for an empty geometry, and a section with nothing
-// in it (all air) has an empty geometry. prismarine-viewer builds those
-// for every empty section of the world.
-const KNOWN = /Computed radius is NaN/;
+// Every console error is a failure. (Correction, 2026-11-01: this check
+// used to excuse "Computed radius is NaN" warnings as an empty-section
+// artifact of three.js. They were not. They were the browser's fallback
+// box for name-less entities — BoxGeometry(undefined, undefined,
+// undefined) — a dozen per load; viewer/src/server.js now leaves those
+// entities out. The playtest note in docs/ has the diagnosis.)
 const consoleErrors = consoleLines.filter((l) => l.startsWith('[error]'));
-const unknownErrors = consoleErrors.filter((l) => !KNOWN.test(l));
-if (unknownErrors.length) {
-  check(
-    false,
-    'no console errors',
-    unknownErrors.slice(0, 3).join(' | ')
-  );
-} else if (consoleErrors.length) {
-  console.log(
-    `  note   ${consoleErrors.length} known three.js warnings about empty sections (harmless)`
-  );
-} else {
-  console.log('  ok    no console errors');
-}
+check(
+  consoleErrors.length === 0,
+  'no console errors',
+  consoleErrors.slice(0, 3).join(' | ')
+);
 
 await browser.close();
 

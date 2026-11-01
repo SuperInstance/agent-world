@@ -150,10 +150,19 @@ class TranslatingSocket {
    * model is left out: the browser would otherwise draw it as a magenta
    * box and say so in the console. A player is drawn as a player, with
    * their name above them.
+   *
+   * An entity with **no name at all** is left out too. The browser's
+   * fallback for a name-less entity is a box sized from `width` and
+   * `height`, and a name-less entity has neither — 26.1 knows entities
+   * the viewer's 1.21.4 tables do not — so the box is built from
+   * `undefined` and its geometry is pure NaN. Every load printed a
+   * dozen "Computed radius is NaN" warnings for the dozen such
+   * entities in view (the playtest of 2026-11-01). A departure still
+   * goes through: the page must forget what it once drew.
    */
   drawable(entity) {
-    // A departure or a move: nothing to decide.
-    if (entity.delete || !entity.name) return entity;
+    if (entity.delete) return entity;
+    if (!entity.name) return null;
     if (entity.username) return { ...entity, name: 'player' };
     if (DRAWABLE_ENTITIES.has(entity.name)) return entity;
     return null;
