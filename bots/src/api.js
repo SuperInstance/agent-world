@@ -86,51 +86,147 @@ function givePathfinding(bot) {
   bot.pathfinder.setMovements(movements);
 }
 
+/** Cancel a walk, if one is running, and give the cancellation a moment
+ * to land. A stop that arrives while the next walk is starting stops
+ * that one instead, and a builder whose every walk is stopped before it
+ * begins is a builder that stands still forever (probe7: "Path was
+ * stopped before it could be completed", two milliseconds in). */
+async function stopWalking(bot) {
+  try {
+    bot.pathfinder.stop();
+  } catch (err) {
+    // Nothing was running; nothing to stop.
+  }
+  await new Promise((resolve) => setTimeout(resolve, 150));
+}
+
+/**
+ * How long a walk may run: the caller's timeout, plus 1.5 s for every
+ * block beyond twelve. A near walk keeps the tight deadline it always
+ * had; a far walk — the scout's 24-block survey, the gatherer's climb
+ * home from a dig — needs the extra room, and the stall watcher below
+ * keeps a walk that cannot start from grinding through any of it.
+ */
+function walkBudget(bot, x, y, z, timeout) {
+  const p = bot.entity.position;
+  const far = Math.sqrt((x - p.x) ** 2 + (y - p.y) ** 2 + (z - p.z) ** 2);
+  return timeout + Math.max(0, far - 12) * 1500;
+}
+
+const STALL_MS = 3200; // no net progress for this long → the walk is wedged
+const STALL_PROGRESS = 1.0; // blocks of net progress that disprove a stall
+
+/**
+ * One attempt: the planner's own goto, under a stall watcher.
+ *
+ * Resolves 'arrived' when the goal is reached, 'error:…' when the
+ * planner itself gives up (NoPath and friends), 'timeout' when the
+ * walk's whole budget is spent, and 'stalled' when the bot stops
+ * making progress — the signature of a bot pressed against a block it
+ * cannot step over: the planner finds a path, its follower cannot make
+ * the first move, and the walk would otherwise hang to its deadline
+ * having moved nothing (probe17: fifty-eight seconds, zero blocks).
+ */
+function attemptWalk(bot, x, y, z, distance, deadline) {
+  return new Promise((resolve) => {
+    let done = false;
+    let timer = null;
+    let checkpoint = bot.entity.position.clone();
+    const arrived = () => bot.entity.position.distanceTo(new Vec3(x, y, z)) <= distance + 0.5;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      clearInterval(watcher);
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+    bot.pathfinder.goto(new goals.GoalNear(x, y, z, distance)).then(
+      () => finish('arrived'),
+      (err) => finish('error:' + String((err && err.message) || err))
+    );
+    const rearm = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => finish('stalled'), STALL_MS);
+    };
+    timer = setTimeout(() => finish('stalled'), STALL_MS);
+    const watcher = setInterval(() => {
+      if (arrived()) {
+        finish('arrived');
+        return;
+      }
+      if (bot.entity.position.distanceTo(checkpoint) >= STALL_PROGRESS) {
+        checkpoint = bot.entity.position.clone();
+        rearm();
+      }
+      if (Date.now() >= deadline) finish('timeout');
+    }, 1200);
+  });
+}
+
+/**
+ * The un-wedge. A bot pressed against a face reports itself off the
+ * ground while it presses, so even a jump will not fire (probe18), and
+ * every planner retry goes nowhere. Raw controls away from the face do
+ * work — a step back opens the pocket — so the bot backs off, sidesteps
+ * both ways, and lets the next attempt plan from a clean standstill.
+ */
+async function nudge(bot) {
+  await stopWalking(bot);
+  for (const control of ['back', 'left', 'right']) {
+    bot.setControlState(control, true);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    bot.setControlState(control, false);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 250));
+}
+
 /**
  * Walk to within `distance` blocks of a point.
  *
  * The deadline matters: the planner retries an unreachable goal for as
  * long as it likes, and a builder that waits forever on a log it can
  * never reach is a builder that has stopped working. So every walk has
- * a clock, and a walk that runs out of time is a failure the skill can
- * hear about.
+ * a clock (scaled to how far the walk is), and a walk that runs out of
+ * time is a failure the skill can hear about.
+ *
+ * A walk that *cannot start* — a bot wedged against a cobble line, or
+ * standing in water its planner will not swim out of — is worse than a
+ * slow one: it burns the whole deadline, records an honest but useless
+ * loss, and starts the same doomed walk again next tick. That is how
+ * three builders spent an afternoon playing the same walk 20 seconds at
+ * a time and never moving a block. So the walk watches its own
+ * progress: when it stops for three seconds, the bot backs off (one
+ * nudge), tries again, and after two nudges gives up early — the
+ * skill hears a failure it can act on, and the walk that could not
+ * start has cost seconds, not the whole clock.
  */
 async function gotoNear(bot, x, y, z, distance = 2, timeout = 20000) {
-  let settled = false;
-  let timer = null;
+  const deadline = Date.now() + walkBudget(bot, x, y, z, timeout);
+  const within = () => bot.entity.position.distanceTo(new Vec3(x, y, z)) <= distance + 0.5;
+  let reason = null;
+  let nudges = 0;
   try {
-    await Promise.race([
-      bot.pathfinder.goto(new goals.GoalNear(x, y, z, distance)).then(
-        (value) => {
-          settled = true;
-          return value;
-        },
-        (err) => {
-          settled = true;
-          throw err;
-        }
-      ),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('the walk took too long')), timeout);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-    if (!settled) {
-      // The walk never settled, so cancel it — and give the
-      // cancellation a moment to land. A stop that arrives while the
-      // next walk is starting stops that one instead, and a builder
-      // whose every walk is stopped before it begins is a builder that
-      // stands still forever (probe7: "Path was stopped before it could
-      // be completed", two milliseconds in).
-      try {
-        bot.pathfinder.stop();
-      } catch (err) {
-        // Nothing was running; nothing to stop.
+    while (Date.now() < deadline) {
+      if (within()) return;
+      const outcome = await attemptWalk(bot, x, y, z, distance, deadline);
+      if (outcome === 'arrived') return;
+      if (outcome.startsWith('error:')) throw new Error(outcome.slice(6));
+      // A stall buys one nudge; the third stall ends the walk, and the
+      // whole budget ending it does too.
+      if (outcome === 'timeout') {
+        reason = 'the walk took too long';
+        break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (++nudges > 2) {
+        reason = 'the walk could not start';
+        break;
+      }
+      await nudge(bot);
     }
+  } finally {
+    if (!within()) await stopWalking(bot);
   }
+  throw new Error(reason || 'the walk could not start');
 }
 
 /** What a tree is made of: the spawn column may be inside one. */
