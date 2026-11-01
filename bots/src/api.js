@@ -75,15 +75,40 @@ const FACES = [
  * gives the bot `bot.pathfinder`, and `goto` takes a goal. The
  * movements let the planner dig through a block on its way, which is
  * what a builder in a quarry needs.
+ *
+ * The guard, when there is one, reaches into the planner too: the
+ * planner's `safeToBreak` is asked about every block it might dig on
+ * its way, so the no-grief rule holds on the path as well as at the
+ * workface. Without it, a builder walking home would dig a doorway
+ * through somebody's house because the door was on the shortest path.
  */
-function givePathfinding(bot) {
-  if (bot.pathfinder && typeof bot.pathfinder.goto === 'function') return;
+function givePathfinding(bot, guard) {
+  const applyGuard = () => {
+    if (!guard) return;
+    try {
+      const movements = bot.pathfinder ? bot.pathfinder.movements : null;
+      if (!movements) return;
+      const plain = movements.safeToBreak.bind(movements);
+      movements.safeToBreak = (block) => {
+        if (!plain(block)) return false;
+        if (!block || !block.position) return true;
+        return guard.mayDig(block.position).ok;
+      };
+    } catch (err) {
+      // The planner's own rule stands; the api's guard still holds.
+    }
+  };
+  if (bot.pathfinder && typeof bot.pathfinder.goto === 'function') {
+    applyGuard();
+    return;
+  }
   bot.loadPlugin(pathfinderPlugin);
   const movements = new Movements(bot);
   movements.canDigBlocks = true;
   movements.allow1by1towers = false;
   movements.allowParkour = false;
   bot.pathfinder.setMovements(movements);
+  applyGuard();
 }
 
 /** Cancel a walk, if one is running, and give the cancellation a moment
@@ -279,8 +304,20 @@ function depotSpot(bot) {
   return { x, y: start, z };
 }
 
-/** The vocabulary: the words a skill may use, and what they do. */
-function buildApi(bot, counters) {
+/** The vocabulary: the words a skill may use, and what they do.
+ *
+ * The guard is the no-grief rule (see humanity.js). It is optional so
+ * the tests and the probes can run without a person in the world; the
+ * builders never run without one.
+ */
+const OPEN_GUARD = {
+  mayDig: () => ({ ok: true }),
+  mayPlace: () => ({ ok: true }),
+  isPlayerChest: () => false,
+  ownPlacement: () => {},
+};
+
+function buildApi(bot, counters, guard = OPEN_GUARD) {
   const registry = bot.registry;
   // The depot: the chest the community shares. The gatherer fills it,
   // the builder empties it. It is why four builders are a community and
@@ -434,15 +471,15 @@ function buildApi(bot, counters) {
       return { ok: false, detail: `the depot has no ${wanted.join(', ')}` };
     },
     find_chest: () => {
-      const found = findByIds(
-        bot,
-        registry,
-        ['chest', 'trapped_chest'],
-        32,
-        bot.entity.position.floored(),
-        true
-      );
+      // A person's chest is not the community's: it is found, and then
+      // left alone. (The depot chest was placed by the world, so it is
+      // not in the ledger.)
+      const feet = bot.entity.position.floored();
+      const found = findByIds(bot, registry, ['chest', 'trapped_chest'], 32, feet, true);
       if (!found) return null;
+      if (guard.isPlayerChest(found.position)) {
+        return { player_chest: true, x: found.position.x, y: found.position.y, z: found.position.z };
+      }
       return { x: found.position.x, y: found.position.y, z: found.position.z };
     },
     nearby_players: () =>
@@ -463,6 +500,13 @@ function buildApi(bot, counters) {
       if (!block) return { ok: false, detail: 'there is no block there' };
       if (block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') {
         return { ok: false, detail: 'there is nothing to mine there' };
+      }
+      // A person's block is never mined, however good it looks. This is
+      // the workface of the no-grief rule: every skill digs through
+      // here, so every skill is held to it.
+      const verdict = guard.mayDig(block.position);
+      if (!verdict.ok) {
+        return { ok: false, detail: `not mining that: ${verdict.why}` };
       }
       try {
         await approach(bot, block.position);
@@ -500,6 +544,12 @@ function buildApi(bot, counters) {
       const item = bot.inventory.items().find((i) => i.name === name);
       if (!item) return { ok: false, detail: `the bot has no ${name}` };
       const position = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+      // The build-side of the no-grief rule: a builder builds beside a
+      // person's build only when the person invited it.
+      const verdict = guard.mayPlace(position);
+      if (!verdict.ok) {
+        return { ok: false, detail: `not building there: ${verdict.why}` };
+      }
       const target = bot.blockAt(position);
       if (
         target &&
@@ -534,6 +584,7 @@ function buildApi(bot, counters) {
         await bot.lookAt(position.offset(0.5, 0.5, 0.5), true);
         await bot.placeBlock(reference, face);
         counters.placed += 1;
+        guard.ownPlacement(position);
         return { ok: true, detail: `placed ${name}` };
       } catch (err) {
         return { ok: false, detail: String((err && err.message) || err) };
@@ -575,6 +626,10 @@ function buildApi(bot, counters) {
         (e) => e && e.name === name && e.position
       );
       if (!target) return { ok: false, detail: `there is no ${name} to attack` };
+      // Never a person. Whatever a skill asks for, a player is not it.
+      if (target.type === 'player' || target.username) {
+        return { ok: false, detail: 'the builders never attack a player' };
+      }
       try {
         await bot.attack(target);
         return { ok: true, detail: `attacked ${name}` };
@@ -602,6 +657,10 @@ function buildApi(bot, counters) {
           true
         );
         if (!block) return { ok: false, detail: 'there is no chest nearby' };
+        // Never a person's chest: not opened, not emptied, not touched.
+        if (guard.isPlayerChest(block.position)) {
+          return { ok: false, detail: 'that chest is a player\u2019s; leaving it alone' };
+        }
         await approach(bot, block.position);
         openChest = await bot.openContainer(block);
         return { ok: true, detail: 'the chest is open' };

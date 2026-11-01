@@ -155,3 +155,23 @@ re-run.
   mediator), and the scout walks lose 19 of 20 in the forest.
 - The playtest note with the whole story:
   docs/playtest-2026-11-01-reward.md.
+
+## 2026-11-01, the playable round (Casey 13:40: "playable with the agents live")
+
+- Started 14:19 UTC from the desk brief. The world was already up
+  (paper 26.1.2-74, viewer, reflex, four builders, d1 on 8094), the
+  tree clean at 3219f47. Killed a leftover hung `node --test
+  bots/test/goto-near.test.js` (2 h 06 in --test-timeout=0; it passes
+  cleanly in 23 s when actually run, so the hang was the run, not the
+  code).
+- Built the no-grief ledger (bots/src/humanity.js): a block that
+  appears within 6 blocks of a person is theirs; no mining it, no
+  mining within 4 blocks of it, no building within 8 unless the person
+  said "help me build" (a 10-minute invite); a chest a person placed
+  is never opened; players are never attacked. The pathfinder's
+  safeToBreak is held to the same rule, so a planned path cannot dig
+  through a house either. 14 offline tests pin the rules
+  (bots/test/no-grief.test.js, all pass, 81 ms).
+- Next: the command table and the duties, then restart reflex+bots
+  (service.py gains a family= filter so "gather wood" is the chooser's
+  wood family, not a model parsing words), then the probes.
