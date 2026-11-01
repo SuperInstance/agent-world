@@ -7,6 +7,11 @@ runtime/
 node_modules/
 npm-debug.log*
 
+# the voice model mirror (a 92 MB ONNX file and four voice bins): the
+# page fetches it from the viewer, and the docs say the command that
+# re-creates it. It is not carried by git.
+viewer/public/paradee/
+
 # python
 .venv/
 __pycache__/

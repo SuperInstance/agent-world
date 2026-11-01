@@ -31,6 +31,9 @@ const DEFAULTS = {
   webPort: Number(process.env.AW_VIEW_PORT || 8080),
   reflexHost: process.env.AW_REFLEX_HOST || '127.0.0.1',
   reflexPort: Number(process.env.AW_REFLEX_PORT || 8110),
+  botLog:
+    process.env.AW_BOT_LOG ||
+    path.join(path.dirname(path.dirname(__dirname)), 'runtime', 'logs', 'bots.jsonl'),
   name: 'Watcher',
 };
 
@@ -39,6 +42,12 @@ const VIEWER_PUBLIC = path.join(
   path.dirname(require.resolve('prismarine-viewer/package.json')),
   'public'
 );
+// The voice engine and the ORT wasm files it needs, served from the
+// packages themselves: the page never reaches the internet. The
+// packages' exports map does not name their dist files, so the dist
+// directory is found through the package's own entry point.
+const KOKORO_DIST = path.dirname(require.resolve('kokoro-js'));
+const TRANSFORMERS_DIST = path.dirname(require.resolve('@huggingface/transformers'));
 
 /**
  * Move the watcher somewhere it can see.
@@ -98,8 +107,13 @@ async function main() {
 
   // The 3D view is prismarine-viewer's own client, served as it is.
   app.use(express.static(VIEWER_PUBLIC));
-  // Our own pages (the ASCII view) come second, so they can add to it.
+  // Our own pages (the ASCII view, the voices) come second, so they can add to it.
   app.use(express.static(PUBLIC_DIR));
+  // The voice engine's own files: the Kokoro web build and the ONNX
+  // Runtime wasm binaries it loads. Served from node_modules so the
+  // page runs with no build step and no internet.
+  app.use('/vendor/kokoro', express.static(KOKORO_DIST));
+  app.use('/vendor/transformers', express.static(TRANSFORMERS_DIST));
   app.use(express.text({ type: 'text/plain' }));
 
   // --- the watcher -----------------------------------------------------------
@@ -154,6 +168,83 @@ async function main() {
   // state get the same characters.
   let lastFrame = '';
   let lastFrameAt = 0;
+
+  app.get('/voices', (req, res) => {
+    const file = path.join(PUBLIC_DIR, 'voices.html');
+    if (!fs.existsSync(file)) {
+      res.status(404).type('text/plain').send('the voices page is missing');
+      return;
+    }
+    res.type('html').send(fs.readFileSync(file, 'utf8'));
+  });
+
+  // --- the events -------------------------------------------------------------
+  // The narrated feed for the voices: the agents' plays, as they were
+  // recorded in the world's own log. It holds decisions and outcomes and
+  // nothing about a human (no chat, no audio — the kids' privacy rule),
+  // so there is nothing here a voice must never say.
+  const skillsByReflex = { cached: null, at: 0 };
+
+  async function skillsIndex() {
+    if (skillsByReflex.cached && Date.now() - skillsByReflex.at < 60000) {
+      return skillsByReflex.cached;
+    }
+    try {
+      const response = await fetch(
+        `http://${DEFAULTS.reflexHost}:${DEFAULTS.reflexPort}/skills`
+      );
+      const body = await response.json();
+      const index = new Map(
+        (body.skills || []).map((s) => [
+          s.id,
+          { family: s.family, role: s.role, title: s.title },
+        ])
+      );
+      skillsByReflex.cached = index;
+      skillsByReflex.at = Date.now();
+    } catch (err) {
+      // The reflex is down or restarting; the last index still names
+      // most of the skills, and a play with no name is still a play.
+    }
+    return skillsByReflex.cached || new Map();
+  }
+
+  app.get('/events', async (req, res) => {
+    const after = String(req.query.after || '');
+    const limit = Math.min(Number(req.query.limit) || 60, 200);
+    const index = await skillsIndex();
+    let lines = [];
+    try {
+      const tail = await fs.promises.readFile(DEFAULTS.botLog, 'utf8');
+      lines = tail.trim().split('\n').slice(-800);
+    } catch (err) {
+      res.json({ events: [] });
+      return;
+    }
+    const events = [];
+    for (const line of lines) {
+      let record = null;
+      try {
+        record = JSON.parse(line);
+      } catch (err) {
+        continue;
+      }
+      if (record.kind !== 'outcome' || !record.bot) continue;
+      if (after && String(record.at) <= after) continue;
+      const skill = index.get(record.skill) || {};
+      events.push({
+        at: record.at,
+        bot: record.bot,
+        role: skill.role || null,
+        family: skill.family || null,
+        title: skill.title || null,
+        result: record.result,
+        detail: record.detail || '',
+      });
+      if (events.length >= limit) break;
+    }
+    res.json({ events });
+  });
 
   app.get('/ascii', (req, res) => {
     const file = path.join(PUBLIC_DIR, 'ascii.html');
