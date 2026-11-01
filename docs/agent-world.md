@@ -229,6 +229,16 @@ and the kinds are `inventory_delta`, `block_placed`, `block_broken`,
 recorded as **partial** — it ran, but it cannot be called a win or a
 loss, and it says so.
 
+A partial play carries **no reward**. The arithmetic that stood here
+before the playtest of 2026-11-01 scored a partial as 0.5, which read
+"we could not measure this" as "this wins half the time" — a constant,
+fabricated reward, and a high one, which held the scout's role on a
+number nobody measured (the survey skill: 18,066 plays, reward exactly
+0.5 on every one; the playtest note has the numbers and the fix). A
+partial is not half a win; it is no measurement, the chooser does not
+learn from it, and an unscored skill keeps the judge's prior — which is
+the designed cold-start rule — until real evidence arrives.
+
 The context travels with the play, because a play without its context
 cannot be learned from: it is the difference between a contextual bandit
 and a lookup table. The context carries the role, the phase (day or
@@ -259,6 +269,14 @@ prior out at the rate the bandit's prior count sets:
 w = prior / (plays + prior)          # 1 for a skill nobody has played
 score = (1 - w) * learned + w * judge # w -> 0 as the record grows
 ```
+
+"Plays" here means **plays that could be scored**. A partial play — no
+reward, §3 — does not enter the bandit's record at all: it counts as no
+observation, and the skill it belongs to stays exactly where the judge's
+prior put it. A skill whose every play is unscorable (a survey) is
+therefore chosen, for as long as that lasts, on the decision model's
+opinion alone — which is what the cold-start rule says for a skill the
+record cannot speak about.
 
 Nothing is thrown away: the judge's answer is in the log, the
 propensity is measured **at the choice** (it cannot be reconstructed
@@ -360,14 +378,33 @@ has models for 94 mobs; an axolotl is not one of them. Rather than draw
 it as a magenta box and say so in the console, the server leaves it out.
 Players are drawn as players, with their name above them.
 
+**The entities the browser cannot even name are left out too.** An
+entity with no name — 26.1 knows entities the viewer's 1.21.4 tables do
+not — used to fall through to the browser's fallback box, which is sized
+from the entity's `width` and `height`; a name-less entity has neither,
+so the box was `BoxGeometry(undefined, undefined, undefined)` and its
+geometry was pure NaN. Every page load printed about a dozen
+"computeBoundingSphere(): Computed radius is NaN" console errors for the
+dozen such entities in view (the playtest of 2026-11-01; the diagnosis
+is in the playtest note). `drawable()` now leaves them out, like the
+model-less mobs, and departures still pass so the page forgets what it
+once drew.
+
 ### The check
 
 `ops/check-views.sh` drives a real browser over all three pages and
 checks, per page: no page errors, nothing saying a version is not
-supported, no failed requests, and — for the 3D view — that the canvas
-holds more than one colour and that the page says how the world is being
-drawn. A 200 with live frames would not have caught the blank canvas;
-the pixels do. Run it after any change to the viewer.
+supported, **no console errors at all**, no failed requests, and — for
+the 3D view — that the canvas holds more than one colour and that the
+page says how the world is being drawn. A 200 with live frames would not
+have caught the blank canvas; the pixels do. Run it after any change to
+the viewer.
+
+(Correction, 2026-11-01: this check used to excuse the "Computed radius
+is NaN" console errors as a harmless three.js artifact of empty
+sections. They were not empty sections — they were the name-less-entity
+boxes above, a dozen per load — and the excuse is gone: a console error
+now fails the check.)
 
 **The text view** (`/ascii`) is the Syzygy-style projection: one
 perspective, projected into characters by a kernel with two properties
