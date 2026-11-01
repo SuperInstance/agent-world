@@ -200,6 +200,12 @@ async function nudge(bot) {
  * skill hears a failure it can act on, and the walk that could not
  * start has cost seconds, not the whole clock.
  */
+/** A stop that lands while a walk is starting kills that walk, and the
+ * planner reports it as a rejection rather than a verdict (probe7's
+ * "Path was stopped before it could be completed", two milliseconds
+ * in). It is an interruption, not an answer: retry it like a stall. */
+const STOP_RACE = /stopped before it could be completed|path was stopped/i;
+
 async function gotoNear(bot, x, y, z, distance = 2, timeout = 20000) {
   const deadline = Date.now() + walkBudget(bot, x, y, z, timeout);
   const within = () => bot.entity.position.distanceTo(new Vec3(x, y, z)) <= distance + 0.5;
@@ -208,9 +214,13 @@ async function gotoNear(bot, x, y, z, distance = 2, timeout = 20000) {
   try {
     while (Date.now() < deadline) {
       if (within()) return;
-      const outcome = await attemptWalk(bot, x, y, z, distance, deadline);
+      let outcome = await attemptWalk(bot, x, y, z, distance, deadline);
       if (outcome === 'arrived') return;
-      if (outcome.startsWith('error:')) throw new Error(outcome.slice(6));
+      if (outcome.startsWith('error:')) {
+        const message = outcome.slice(6);
+        if (!STOP_RACE.test(message)) throw new Error(message);
+        outcome = 'stalled';
+      }
       // A stall buys one nudge; the third stall ends the walk, and the
       // whole budget ending it does too.
       if (outcome === 'timeout') {

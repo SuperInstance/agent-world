@@ -115,3 +115,28 @@ test('a walk that is making progress is left alone and arrives', async () => {
     );
   });
 });
+
+test('a stop-race rejection is retried, not obeyed', async () => {
+  await withStub(null, async (bot) => {
+    let calls = 0;
+    bot.pathfinder.goto = function (goal) {
+      bot.goal = goal;
+      bot.walking = true;
+      calls += 1;
+      if (calls === 1) {
+        // probe7's artifact: a stop lands as the walk starts, and the
+        // planner reports the interruption as a rejection.
+        return new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Path was stopped before it could be completed!')), 100)
+        );
+      }
+      return new Promise(() => {}); // then the walk proceeds
+    };
+    await gotoNear(bot, 8, 70, 0, 2, 20000); // must not throw
+    assert.ok(calls >= 2, 'the walk was not retried');
+    assert.ok(
+      bot.entity.position.distanceTo(new Vec3(8, 70, 0)) <= 2.5,
+      'the bot is not near the goal'
+    );
+  });
+});
