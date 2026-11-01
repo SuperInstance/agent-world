@@ -1,0 +1,18 @@
+# runtime: everything the Thor actually runs lives here and is not in git.
+# The JDK, the Node runtime, the Paper jar, the world data, the logs,
+# the skill library and the audit ledger are all re-creatable state.
+runtime/
+
+# node
+node_modules/
+npm-debug.log*
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# editors / os
+.DS_Store
+*.swp
