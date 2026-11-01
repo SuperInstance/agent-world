@@ -276,6 +276,19 @@ class ReflexService:
         context = dict(payload.get("context") or {})
         options = list(payload.get("candidates") or [])
         state = str(payload.get("state", ""))
+        family = str(payload.get("family") or "")
+        if family and not options:
+            # A person asked for a job by name ("gather wood" is the
+            # gatherer's wood family). The family narrows the question;
+            # the chooser still makes the choice, the judge still sees
+            # it, and the play is still a play the bandit learns from.
+            # No model ever parses the words — the mapping from chat to
+            # family is a table on the bots' side.
+            options = [
+                {"id": s.id, "title": s.title}
+                for s in self.library.all()
+                if s.status == "active" and s.family == family
+            ]
         if not options:
             # The library is the source of the options: the skills that
             # apply to this builder, in this context, for this role.

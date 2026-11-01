@@ -21,6 +21,7 @@
 const crypto = require('node:crypto');
 const mineflayer = require('mineflayer');
 const { buildApi, createSandbox, givePathfinding } = require('./api');
+const { isAgent, parseCommand, HELP_LINE } = require('./humanity');
 
 const ROLES = {
   gatherer: 'Gets the raw material the other builders need.',
@@ -41,6 +42,7 @@ class Agent {
     tickMs = 2000,
     offset = 0,
     onSpawn,
+    guard = null,
   }) {
     this.name = name;
     this.role = role;
@@ -52,9 +54,16 @@ class Agent {
     this.tickMs = tickMs;
     this.offset = offset;
     this.onSpawn = onSpawn;
+    this.guard = guard;
+
+    // The other builders, set once everyone is in. A command heard by
+    // four bots must be answered by one, and "who is nearest" needs the
+    // whole crew's positions.
+    this.community = [];
 
     this.bot = null;
     this.sandbox = null;
+    this.api = null;
     this.counters = { mined: 0, placed: 0 };
     this.running = false;
     this.reconnecting = false;
@@ -64,7 +73,11 @@ class Agent {
     this.losses = 0;
     this.lastConfidence = null;
     this.lastChoice = null;
+    this.lastActivity = null;
     this.humanNames = new Set();
+    this.duty = null;
+    this.lastSaidAt = 0;
+    this.lastRepliedAt = 0;
   }
 
   // -- the connection ---------------------------------------------------------
@@ -81,8 +94,11 @@ class Agent {
       });
 
       this.bot.once('spawn', () => {
-        givePathfinding(this.bot);
-        this.sandbox = createSandbox(buildApi(this.bot, this.counters));
+        givePathfinding(this.bot, this.guard);
+        this.api = buildApi(this.bot, this.counters, this.guard || undefined);
+        this.sandbox = createSandbox(this.api);
+        this.listenForPeople();
+        this.watchTheBlocks();
         this.log.note({ bot: this.name, event: 'spawn', position: this.position() });
         if (this.onSpawn) this.onSpawn(this);
         resolve(this);
@@ -177,11 +193,422 @@ class Agent {
   }
 
   isAgent(name) {
-    return AGENT_NAMES.has(name);
+    return isAgent(name);
+  }
+
+  // -- the people -------------------------------------------------------------
+
+  /**
+   * Say one line, out loud. Rate-limited by default (a builder with a
+   * narration every tick is noise, not company); a reply to a person is
+   * never dropped — it is `force`, because whoever asked is waiting.
+   * The line goes to the log too, as the builder's own words: that is
+   * what the voices page speaks. Nothing a *person* said ever enters
+   * the log (the privacy rule); this is the builder's line only.
+   */
+  say(text, { force = false } = {}) {
+    if (!this.bot) return false;
+    const now = Date.now();
+    if (!force && now - this.lastSaidAt < 20000) return false;
+    this.lastSaidAt = now;
+    try {
+      this.bot.chat(text);
+    } catch (err) {
+      // Not in the world yet; the line is dropped, not stored for later.
+    }
+    this.log.say({ bot: this.name, text });
+    return true;
+  }
+
+  /** Chat and whispers: a person talking to the crew. */
+  listenForPeople() {
+    const heard = (username, message) => this.heard(username, message);
+    this.bot.on('chat', heard);
+    this.bot.on('whisper', heard);
+  }
+
+  /**
+   * Watch the blocks change around us, so the no-grief ledger learns
+   * what a person placed. Four builders see the same change; the ledger
+   * takes it once.
+   */
+  watchTheBlocks() {
+    if (!this.guard) return;
+    this.bot.on('blockUpdate', (oldBlock, newBlock) => {
+      try {
+        this.guard.observe(oldBlock, newBlock);
+      } catch (err) {
+        // A ledger entry is protective, never load-bearing.
+      }
+    });
+  }
+
+  /**
+   * One line of chat reached this builder. If it is a person and it is
+   * one of the commands, exactly one builder acts on it — the named
+   * one, the one whose role owns the job, or the nearest — except
+   * "stop", which every builder obeys.
+   */
+  heard(username, message) {
+    if (!username || username === this.name) return;
+    if (isAgent(username)) return; // only people command the crew
+    const parsed = parseCommand(message);
+    if (!parsed) return; // free text is not on the tick
+
+    if (parsed.addressee) {
+      const named = this.community.find(
+        (a) => a.name.toLowerCase() === parsed.addressee.toLowerCase()
+      );
+      if (!named || named !== this) return;
+    } else if (parsed.route === 'role') {
+      const owner = this.community.find((a) => a.role === parsed.role);
+      if (!owner || owner !== this) return;
+    } else if (parsed.route === 'nearest') {
+      if (!this.iAmNearestTo(username)) return;
+    }
+
+    this.handleCommand(parsed.command, username);
+  }
+
+  /** Am I the closest builder to this person? Ties go to the first name. */
+  iAmNearestTo(speaker) {
+    const them = this.bot.players[speaker];
+    if (!them || !them.position) return false;
+    let best = null;
+    let bestDistance = Infinity;
+    for (const other of this.community) {
+      if (!other.bot || !other.bot.entity) continue;
+      const distance = other.bot.entity.position.distanceTo(them.position);
+      if (distance < bestDistance - 0.5 || (distance < bestDistance + 0.5 && best && other.name < best.name)) {
+        best = other;
+        bestDistance = Math.min(bestDistance, distance);
+      }
+    }
+    return best === this;
+  }
+
+  /** Where a player is, or null if they are gone. */
+  playerPosition(name) {
+    const player = this.bot.players[name];
+    if (!player || !player.position) return null;
+    return player.position;
+  }
+
+  handleCommand(command, from) {
+    // The word is logged, never the line around it: a person's words
+    // are theirs (the privacy rule), and the crew's obedience is the
+    // world's own record.
+    this.log.note({ bot: this.name, event: 'command', command, from });
+    switch (command) {
+      case 'stop':
+        this.clearDuty('stopped');
+        this.interrupt();
+        if (this.iAmNearestTo(from)) this.say(`we've stopped, ${from}`, { force: true });
+        return;
+      case 'follow':
+        this.setDuty({ kind: 'follow', player: from, expires: 15 * 60 * 1000 }, `following you, ${from}`);
+        return;
+      case 'come':
+        this.setDuty({ kind: 'come', player: from, expires: 60 * 1000 }, `coming, ${from}`);
+        return;
+      case 'help-build':
+        if (this.guard) this.guard.ledger.invite(this.name, from, 10);
+        this.setDuty({ kind: 'assist', player: from, phase: 'approach', since: new Date().toISOString(), expires: 10 * 60 * 1000 }, `coming, ${from} — show me where to build`);
+        return;
+      case 'gather-wood':
+        this.setDuty({ kind: 'gather', material: 'wood', player: from, phase: 'fetch', expires: 6 * 60 * 1000 }, `going for wood, ${from}`);
+        return;
+      case 'gather-stone':
+        this.setDuty({ kind: 'gather', material: 'stone', player: from, phase: 'fetch', expires: 6 * 60 * 1000 }, `going for stone, ${from}`);
+        return;
+      case 'go-home':
+        this.setDuty({ kind: 'home', expires: 2 * 60 * 1000 }, 'heading to the depot');
+        return;
+      case 'what-doing': {
+        if (Date.now() - this.lastRepliedAt < 15000) return;
+        this.lastRepliedAt = Date.now();
+        const doing = this.duty
+          ? {
+              follow: `following ${this.duty.player}`,
+              come: `coming to ${this.duty.player}`,
+              home: 'walking to the depot',
+              gather: `gathering ${this.duty.material} for ${this.duty.player}`,
+              assist: `helping ${this.duty.player} build`,
+            }[this.duty.kind]
+          : this.lastActivity
+            ? `working on: ${this.lastActivity}`
+            : 'between jobs';
+        this.say(`${this.name} is ${doing}`, { force: true });
+        return;
+      }
+      case 'help': {
+        if (Date.now() - this.lastRepliedAt < 30000) return;
+        this.lastRepliedAt = Date.now();
+        this.say(HELP_LINE, { force: true });
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  /** A job from a person outranks the reflex until it is done. */
+  setDuty(duty, line) {
+    duty.since = new Date().toISOString();
+    this.duty = duty;
+    this.interrupt(); // whatever walk was under way stops for the person
+    this.log.note({ bot: this.name, event: 'duty_set', kind: duty.kind, from: duty.player || null });
+    if (line) this.say(line, { force: true });
+  }
+
+  clearDuty(why) {
+    if (!this.duty) return;
+    this.log.note({ bot: this.name, event: 'duty_clear', kind: this.duty.kind, why });
+    this.duty = null;
+  }
+
+  /** Stop the walk under our feet, if there is one. */
+  interrupt() {
+    try {
+      if (this.bot.pathfinder) this.bot.pathfinder.stop();
+    } catch (err) {
+      // Nothing was walking.
+    }
+  }
+
+  /**
+   * One step of the duty. The tick loop calls this instead of the
+   * reflex while a duty holds: a person's request is the one thing that
+   * outranks the world's own work. No model is asked — the duty is a
+   * goal, walked by the same planners the skills use, except "gather",
+   * which asks the reflex for its family's skill like any other play
+   * (the chooser still chooses; the play is still recorded).
+   */
+  async serviceDuty() {
+    const duty = this.duty;
+    if (!duty) return;
+    const them = duty.player ? this.playerPosition(duty.player) : null;
+    if (duty.player && !them) {
+      this.clearDuty(`${duty.player} left the world`);
+      return;
+    }
+
+    if (duty.kind === 'follow') {
+      if (this.bot.entity.position.distanceTo(them) > 4) {
+        await this.api.move_to(
+          Math.floor(them.x), Math.floor(them.y), Math.floor(them.z)
+        );
+      }
+      return;
+    }
+
+    if (duty.kind === 'come' || duty.kind === 'home') {
+      const target =
+        duty.kind === 'home'
+          ? this.api.depot()
+          : { x: Math.floor(them.x), y: Math.floor(them.y), z: Math.floor(them.z) };
+      const distance = this.bot.entity.position.distanceTo(
+        new (require('vec3').Vec3)(target.x, target.y, target.z)
+      );
+      if (distance <= 3) {
+        if (duty.kind === 'come') this.say(`here, ${duty.player}`, { force: true });
+        this.clearDuty(duty.kind === 'home' ? 'home' : 'arrived');
+        return;
+      }
+      await this.api.move_to(target.x, target.y, target.z);
+      return;
+    }
+
+    if (duty.kind === 'gather') {
+      await this.serviceGather(duty);
+      return;
+    }
+
+    if (duty.kind === 'assist') {
+      await this.serviceAssist(duty, them);
+      return;
+    }
+  }
+
+  /** "gather wood/stone": the family's skill through the reflex, then
+   *  the goods carried to the person who asked. */
+  async serviceGather(duty) {
+    if (duty.phase === 'fetch') {
+      const family = duty.material === 'wood' ? 'gatherer.wood' : 'gatherer.stone';
+      let decision = null;
+      try {
+        decision = await this.reflex.decide({
+          bot: this.name,
+          role: this.role,
+          context: this.context(),
+          state: this.worldState(),
+          family,
+        });
+      } catch (err) {
+        this.log.note({
+          bot: this.name,
+          event: 'reflex_unreachable',
+          detail: String(err.message || err),
+        });
+        return; // try again next tick, until the duty expires
+      }
+      if (!decision || !decision.skill_id) {
+        this.say(`I can't get ${duty.material} right now, ${duty.player}`, { force: true });
+        this.clearDuty('the reflex refused');
+        return;
+      }
+      this.log.decision({
+        bot: this.name,
+        role: this.role,
+        skill: decision.skill_id,
+        title: decision.title,
+        reason: 'command:' + family,
+        confidence: decision.confidence,
+      });
+      const record = await this.play(decision, this.context());
+      duty.phase = 'deliver';
+      duty.how = record && record.outcome ? `${record.outcome.result}: ${record.outcome.detail}` : 'ran';
+      return;
+    }
+    if (duty.phase === 'deliver') {
+      const names =
+        duty.material === 'wood'
+          ? ['oak_log', 'spruce_log', 'birch_log', 'cherry_log', 'dark_oak_log', 'jungle_log', 'acacia_log', 'mangrove_log', 'pale_oak_log']
+          : ['cobblestone', 'stone', 'cobbled_deepslate'];
+      const taken = await this.api.take_from_depot(names);
+      const target = this.playerPosition(duty.player);
+      if (!target) {
+        this.clearDuty(`${duty.player} left the world`);
+        return;
+      }
+      if (!taken || !taken.ok) {
+        this.say(`nothing came of it, ${duty.player} (${duty.how})`, { force: true });
+        this.clearDuty('nothing to deliver');
+        return;
+      }
+      await this.api.move_to(Math.floor(target.x), Math.floor(target.y), Math.floor(target.z));
+      const item = this.bot.inventory.items().find((i) => i.name === taken.name);
+      if (item) {
+        try {
+          await this.bot.toss(item.type, null, item.count);
+        } catch (err) {
+          // The goods stay in the bag; the next depot run returns them.
+        }
+      }
+      this.say(
+        `${taken.count} ${taken.name.replace(/_/g, ' ')} for you, ${duty.player}`,
+        { force: true }
+      );
+      this.clearDuty('delivered');
+    }
+  }
+
+  /** "help me build": stand with the person, and when they place a
+   *  block, extend their line or hand them more of the same. */
+  async serviceAssist(duty, them) {
+    // The invite holds while we work together, and lapses when we don't.
+    if (this.guard) this.guard.ledger.invite(this.name, duty.player, 10);
+
+    if (duty.phase === 'approach') {
+      if (this.bot.entity.position.distanceTo(them) <= 4) {
+        duty.phase = 'by';
+        this.say(`ready, ${duty.player} — place blocks and I'll carry on the line`, { force: true });
+        return;
+      }
+      await this.api.move_to(Math.floor(them.x), Math.floor(them.y), Math.floor(them.z));
+      return;
+    }
+
+    if (this.bot.entity.position.distanceTo(them) > 8) {
+      await this.api.move_to(Math.floor(them.x), Math.floor(them.y), Math.floor(them.z));
+      return;
+    }
+
+    const fresh = this.freshPlacements(duty.player, duty.since);
+    const latest = fresh.length ? fresh[fresh.length - 1] : null;
+    if (!latest) return;
+
+    if (duty.lastKey !== latest.key) {
+      duty.prev = duty.lastKey ? this.placementAt(duty.lastKey) : null;
+      duty.lastKey = latest.key;
+    }
+    if (
+      duty.prev &&
+      manhattan(duty.prev, latest) === 1 &&
+      Date.now() - (duty.assistedAt || 0) > 10000
+    ) {
+      const dx = latest.x - duty.prev.x;
+      const dy = latest.y - duty.prev.y;
+      const dz = latest.z - duty.prev.z;
+      const target = { x: latest.x + dx, y: latest.y + dy, z: latest.z + dz };
+      const have = this.api.inventory_count(latest.name);
+      if (have > 0) {
+        const placed = await this.api.place(latest.name, target.x, target.y, target.z);
+        if (placed.ok) {
+          duty.assistedAt = Date.now();
+          this.say(`carried your ${latest.name.replace(/_/g, ' ')} on, ${duty.player}`, { force: true });
+        }
+        return;
+      }
+      // Nothing of the same kind: hand over what we build with, so the
+      // person can carry the line themselves.
+      if (Date.now() - (duty.tossedAt || 0) > 30000) {
+        const stone = this.bot.inventory.items().find(
+          (i) => i.name === 'cobblestone' || i.name === 'oak_planks'
+        );
+        if (stone) {
+          try {
+            await this.bot.toss(stone.type, null, Math.min(stone.count, 8));
+            duty.tossedAt = Date.now();
+            this.say(`no ${latest.name.replace(/_/g, ' ')} on me — here's ${stone.name.replace(/_/g, ' ')}`, { force: true });
+          } catch (err) {
+            // The toss is a courtesy; the duty holds.
+          }
+        }
+      }
+    }
+  }
+
+  /** The blocks a player has placed since an instant, newest last. */
+  freshPlacements(player, sinceIso) {
+    if (!this.guard) return [];
+    const out = [];
+    for (const row of this.guard.ledger.placed.values()) {
+      if (row.by !== player) continue;
+      if (String(row.at) <= String(sinceIso)) continue;
+      const [x, y, z] = row.pos.split(',').map(Number);
+      out.push({ key: row.pos, x, y, z, name: row.name, at: row.at });
+    }
+    out.sort((a, b) => (a.at < b.at ? -1 : 1));
+    return out;
+  }
+
+  placementAt(key) {
+    const [x, y, z] = key.split(',').map(Number);
+    return { x, y, z };
   }
 
   async tick() {
     if (!this.bot || !this.bot.entity) return;
+    // A person's request outranks the world's own work, and it never
+    // waits on a model: the duty is walked, not asked.
+    if (this.duty) {
+      if (Date.now() > this.duty.expires) {
+        this.clearDuty('the duty ran out of time');
+      } else {
+        try {
+          await this.serviceDuty();
+        } catch (err) {
+          this.log.note({
+            bot: this.name,
+            event: 'duty_failed',
+            kind: this.duty ? this.duty.kind : 'gone',
+            detail: String(err.message || err),
+          });
+        }
+        return;
+      }
+    }
     this.ticks += 1;
     const ctx = this.context();
     let decision;
@@ -216,6 +643,7 @@ class Agent {
     this.lastConfidence =
       typeof decision.confidence === 'number' ? decision.confidence : this.lastConfidence;
     this.lastChoice = decision.reason;
+    this.lastActivity = decision.title || this.lastActivity;
     this.log.decision({
       bot: this.name,
       role: this.role,
@@ -298,6 +726,7 @@ class Agent {
         detail: String(err.message || err),
       });
     }
+    return record;
   }
 
   inventoryMap() {
@@ -402,15 +831,10 @@ class Agent {
   }
 }
 
-// The names the world owns. A player who is not one of these is a human.
-// The watcher is the spectator the viewer page joins as, and the probes
-// are the world's own diagnostics: none of them is a person, and reading
-// them as one would tell the mediator a human had joined whenever
-// somebody opened the world's window.
-const AGENT_NAMES = new Set([
-  'Pebble', 'Timber', 'Kite', 'Sprout',
-  'Watcher',
-  'Probe', 'Probe2', 'Probe3', 'Probe4', 'Probe5', 'Probe6',
-]);
+// The names the world owns live in humanity.js now, with the rest of
+// how a builder behaves when a person is in the world.
+function manhattan(a, b) {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.z - b.z);
+}
 
-module.exports = { Agent, ROLES, AGENT_NAMES };
+module.exports = { Agent, ROLES };

@@ -49,9 +49,14 @@ class Reflex {
     });
   }
 
-  /** One tick's question: what should this builder do next? */
-  decide({ bot, role, context, state }) {
-    return this.post('/decide', { bot, role, context, state });
+  /** One tick's question: what should this builder do next? A `family`
+   *  narrows the question to one skill family — that is how a chat
+   *  command ("gather wood") asks for its skill without any model
+   *  parsing the words. */
+  decide({ bot, role, context, state, family }) {
+    const payload = { bot, role, context, state };
+    if (family) payload.family = family;
+    return this.post('/decide', payload);
   }
 
   /** The play record: what happened, and did the prediction hold? */
