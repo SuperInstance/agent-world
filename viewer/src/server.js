@@ -22,7 +22,10 @@ const socketio = require('socket.io');
 const mineflayer = require('mineflayer');
 const { pathfinder: pathfinderPlugin, Movements, goals } = require('mineflayer-pathfinder');
 const { WorldView } = require('prismarine-viewer/viewer');
+const { supportedVersions, getVersion } = require('prismarine-viewer/viewer/lib/version');
+const ENTITY_MODELS = require('prismarine-viewer/viewer/lib/entity/entities.json');
 const { project } = require('./ascii');
+const { Translator } = require('./translate');
 
 const DEFAULTS = {
   host: process.env.AW_HOST || '192.168.0.78',
@@ -48,6 +51,114 @@ const VIEWER_PUBLIC = path.join(
 // directory is found through the package's own entry point.
 const KOKORO_DIST = path.dirname(require.resolve('kokoro-js'));
 const TRANSFORMERS_DIST = path.dirname(require.resolve('@huggingface/transformers'));
+
+// --- the drawing ------------------------------------------------------------
+//
+// The world runs Minecraft 26.1. prismarine-viewer's browser bundle was
+// built against 1.21.4, and its version lookup answers null for 26.1 —
+// so the page used to say "null is not supported" and draw nothing.
+//
+// So the server re-encodes the world's block states into the version the
+// browser can draw (translate.js), and tells the page that version. If
+// even that version's assets are missing, the page says so and points at
+// the text view rather than going blank.
+
+const LATEST_SUPPORTED = supportedVersions[supportedVersions.length - 1];
+
+// The mobs the browser has a model for. Anything else is left out of the
+// drawing rather than drawn as a magenta box.
+const DRAWABLE_ENTITIES = new Set(Object.keys(ENTITY_MODELS));
+
+/** Are the browser's assets for this version on the server? */
+function assetsFor(version) {
+  return {
+    blocksStates: fs.existsSync(path.join(VIEWER_PUBLIC, 'blocksStates', `${version}.json`)),
+    textures: fs.existsSync(path.join(VIEWER_PUBLIC, 'textures', `${version}.png`)),
+  };
+}
+
+/**
+ * Which version the page draws with, and whether it can draw at all.
+ */
+function planFor(sourceVersion) {
+  const exact = getVersion(sourceVersion);
+  const target = exact || LATEST_SUPPORTED;
+  const assets = assetsFor(target);
+  const plan = {
+    ok: assets.blocksStates && assets.textures,
+    source: sourceVersion,
+    target,
+    translated: exact === null,
+    supported: supportedVersions,
+  };
+  if (!plan.ok) {
+    plan.message =
+      `This browser build cannot draw Minecraft ${sourceVersion}, and the assets ` +
+      `for ${target} are not on the server either.`;
+  }
+  return plan;
+}
+
+/**
+ * The socket, with the world's version translated on the way out.
+ *
+ * The WorldView emits the world's own block states: 26.1's. The browser
+ * draws 1.21.4's. So the chunk palettes and the block updates are
+ * re-encoded here, on their way to the page.
+ */
+class TranslatingSocket {
+  constructor(socket, translator) {
+    this.socket = socket;
+    this.translator = translator;
+  }
+
+  on(event, handler) {
+    this.socket.on(event, handler);
+  }
+
+  emit(event, payload) {
+    if (event === 'entity') {
+      const entity = this.drawable(payload);
+      if (entity) this.socket.emit(event, entity);
+      return;
+    }
+    if (!this.translator) {
+      this.socket.emit(event, payload);
+      return;
+    }
+    if (event === 'loadChunk') {
+      this.socket.emit(event, {
+        ...payload,
+        chunk: this.translator.translateChunk(payload.chunk),
+      });
+      return;
+    }
+    if (event === 'blockUpdate') {
+      this.socket.emit(event, {
+        ...payload,
+        stateId: this.translator.translate(payload.stateId),
+      });
+      return;
+    }
+    this.socket.emit(event, payload);
+  }
+
+  /**
+   * What the browser can draw of an entity.
+   *
+   * prismarine-viewer has a model for a fixed list of mobs. A mob with no
+   * model is left out: the browser would otherwise draw it as a magenta
+   * box and say so in the console. A player is drawn as a player, with
+   * their name above them.
+   */
+  drawable(entity) {
+    // A departure or a move: nothing to decide.
+    if (entity.delete || !entity.name) return entity;
+    if (entity.username) return { ...entity, name: 'player' };
+    if (DRAWABLE_ENTITIES.has(entity.name)) return entity;
+    return null;
+  }
+}
 
 /**
  * Move the watcher somewhere it can see.
@@ -105,6 +216,19 @@ async function main() {
   const server = http.createServer(app);
   const io = socketio(server, { path: '/socket.io' });
 
+  // Our own 3D page: prismarine-viewer's own client, with the banner that
+  // says how the world is being drawn and the message that appears when
+  // the version cannot be drawn at all. It is served before the static
+  // files, so it is the page "/" gives.
+  app.get('/', (req, res) => {
+    const file = path.join(PUBLIC_DIR, 'index.html');
+    if (!fs.existsSync(file)) {
+      res.status(404).type('text/plain').send('the 3D page is missing');
+      return;
+    }
+    res.type('html').send(fs.readFileSync(file, 'utf8'));
+  });
+
   // The 3D view is prismarine-viewer's own client, served as it is.
   app.use(express.static(VIEWER_PUBLIC));
   // Our own pages (the ASCII view, the voices) come second, so they can add to it.
@@ -130,17 +254,37 @@ async function main() {
   bot.on('kicked', (reason) => console.log('watcher kicked:', reason));
 
   const sockets = [];
+  let plan = null;
+  let translator = null;
 
   bot.once('spawn', () => {
     console.log(`the watcher is in the world at ${bot.entity.position}`);
+    plan = planFor(bot.version || DEFAULTS.version);
+    if (plan.ok) {
+      if (plan.translated) {
+        translator = new Translator(plan.source, plan.target);
+        console.log(
+          `the 3D view draws ${plan.source} as ${plan.target}: the browser has no ${plan.source} assets`
+        );
+      } else {
+        console.log(`the 3D view draws ${plan.source} as it is`);
+      }
+    } else {
+      console.log(plan.message);
+    }
     standClear(bot).catch((err) => {
       console.log('the watcher stayed where it landed:', err.message);
     });
     io.on('connection', (socket) => {
-      socket.emit('version', bot.version);
+      socket.emit('version', plan ? plan.target : DEFAULTS.version);
       sockets.push(socket);
 
-      const worldView = new WorldView(bot.world, 6, bot.entity.position, socket);
+      const worldView = new WorldView(
+        bot.world,
+        6,
+        bot.entity.position,
+        new TranslatingSocket(socket, translator)
+      );
       worldView.init(bot.entity.position);
 
       function botPosition() {
@@ -246,6 +390,18 @@ async function main() {
     res.json({ events });
   });
 
+  app.get('/view-plan', (req, res) => {
+    if (!plan) {
+      res.json({
+        ok: false,
+        message: 'the watcher is not in the world yet',
+        textView: '/ascii',
+      });
+      return;
+    }
+    res.json({ ...plan, textView: '/ascii' });
+  });
+
   app.get('/ascii', (req, res) => {
     const file = path.join(PUBLIC_DIR, 'ascii.html');
     if (!fs.existsSync(file)) {
@@ -290,6 +446,10 @@ async function main() {
       },
       people,
       reflex,
+      // How the world is being drawn: which version the page gets, and
+      // what had to be approximated to get there.
+      view: plan,
+      drawing: translator ? translator.stats() : null,
     });
   });
 
