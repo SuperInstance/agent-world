@@ -60,6 +60,16 @@ FLOODGATE_FILE="floodgate-spigot.jar"
 FLOODGATE_URL="https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/120/downloads/spigot"
 FLOODGATE_SHA="3b69f4587bd683f58589c967ce0a2fbf07e855badf3fd880fe3519b1aebcaa2c"
 
+# The voices: Kokoro-82M v1.2 int8 (Apache-2.0) and the four voice
+# files the spectator page speaks with. The page loads them from the
+# viewer itself (viewer/public/paradee/), never from the internet —
+# after the first load the Orin's Firefox needs no network at all. The
+# voices ship inside the kokoro-js package; the model is mirrored from
+# the model hub so the checksum is ours.
+KOKORO_BASE="https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main"
+KOKORO_DIR="$AW_ROOT/viewer/public/paradee/models/onnx-community/Kokoro-82M-v1.0-ONNX"
+KOKORO_MODEL_SHA="fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478"
+
 VERIFY_ONLY=0
 [ "${1:-}" = "--verify" ] && VERIFY_ONLY=1
 
@@ -133,5 +143,41 @@ fetch "$PAPER_121_URL" "$PAPER_121_FILE" "$PAPER_121_SHA" || true
 # --- Geyser + Floodgate -----------------------------------------------------
 fetch "$GEYSER_URL" "$GEYSER_FILE" "$GEYSER_SHA" || true
 fetch "$FLOODGATE_URL" "$FLOODGATE_FILE" "$FLOODGATE_SHA" || true
+
+# --- the voices -------------------------------------------------------------
+# The mirror the page speaks from: the model, the configs, and the four
+# voices. The voices come out of the npm package (cd viewer && npm
+# install), so they are here only when it has run at least once.
+mkdir -p "$KOKORO_DIR/onnx" "$KOKORO_DIR/voices"
+for conf in config.json preprocessor_config.json processor_config.json \
+            generation_config.json tokenizer.json tokenizer_config.json chat_template.json; do
+    if [ ! -s "$KOKORO_DIR/$conf" ] && [ "$VERIFY_ONLY" != "1" ]; then
+        curl -sSL --retry 3 -o "$KOKORO_DIR/$conf" "$KOKORO_BASE/$conf" || true
+    fi
+    [ -s "$KOKORO_DIR/$conf" ] || warn "$conf: missing from the voice mirror"
+done
+if [ ! -s "$KOKORO_DIR/onnx/model_quantized.onnx" ]; then
+    if [ "$VERIFY_ONLY" = "1" ]; then
+        warn "the voice model is missing (verify mode, not fetching)"
+    else
+        say "downloading the voice model (92 MB)"
+        curl -sSL --retry 3 -o "$KOKORO_DIR/onnx/model_quantized.onnx.part" "$KOKORO_BASE/onnx/model_quantized.onnx"
+        mv "$KOKORO_DIR/onnx/model_quantized.onnx.part" "$KOKORO_DIR/onnx/model_quantized.onnx"
+    fi
+fi
+if [ -s "$KOKORO_DIR/onnx/model_quantized.onnx" ]; then
+    have="$(sha256sum "$KOKORO_DIR/onnx/model_quantized.onnx" | cut -d' ' -f1)"
+    [ "$have" = "$KOKORO_MODEL_SHA" ] || die "the voice model's checksum differs (want $KOKORO_MODEL_SHA, got $have)"
+    say "the voice model: mirrored and the checksum matches"
+fi
+KOKORO_PKG="$AW_ROOT/viewer/node_modules/kokoro-js/voices"
+for voice in af_heart bf_isabella am_puck bm_fable; do
+    if [ -f "$KOKORO_PKG/$voice.bin" ]; then
+        cmp -s "$KOKORO_PKG/$voice.bin" "$KOKORO_DIR/voices/$voice.bin" 2>/dev/null || \
+            cp "$KOKORO_PKG/$voice.bin" "$KOKORO_DIR/voices/$voice.bin"
+    else
+        [ -s "$KOKORO_DIR/voices/$voice.bin" ] || warn "voice $voice: not in the mirror (run: cd viewer && npm install)"
+    fi
+done
 
 say "runtime is under $AW_RUNTIME"

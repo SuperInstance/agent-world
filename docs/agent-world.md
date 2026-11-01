@@ -22,7 +22,7 @@ standing on that box is therefore a deliberate one:
 | Paper 26.1.2 build 74 | the world itself; Java 25 (Temurin, aarch64 tarball, local directory) |
 | heap | `-Xms2G -Xmx6G`, at `nice 10` |
 | memory floor | the world does not start, and the builders stand aside, while the box has **less than 25 GB free** |
-| the heavy lock | **not taken by the world.** It is taken only while the decision model loads (`ops/run-d1.sh`) |
+| the heavy lock | **not taken by the world.** The decision model loads through the admission daemon (`thor-admit serve`), which leases only the load |
 
 The 25 GB floor is the rule that came out of the 13:22 OOM, and the
 lock is the stopgap that came with it. The world applies the rule
@@ -39,6 +39,7 @@ the world uses 2 GB and runs at `nice 10`.
 | Minecraft Bedrock (Geyser + Floodgate) | 192.168.0.78:19132 | UDP |
 | the 3D view | http://192.168.0.78:8080/ | HTTP |
 | the text view | http://192.168.0.78:8080/ascii | HTTP |
+| the voices | http://192.168.0.78:8080/voices | HTTP (model and engine in the page) |
 | the reflex (internal) | 127.0.0.1:8110 | HTTP, loopback only |
 | the decision model | 192.168.0.78:8094 | HTTP (d1-2B, `llama-server`) |
 
@@ -85,7 +86,16 @@ what it needs. The reflex does three things:
    That probability is the **cold-start prior**; the learned estimate
    washes it out as the record grows (§4).
 
-The decision model is **d1-2B**, served once on the Thor and shared.
+The decision model is **d1-2B**, served once on the box and shared —
+and "once" is now literal: `ops/run-d1.sh` loads it through the
+admission daemon (`thor-admit serve`), which holds a lease only while
+the model loads and hands any other seat that asks for d1-2B **this
+server's port** instead of letting a second copy onto the box. (The
+world ran for an evening with the reflex asking port 8094 while two
+other seats each carried their own d1 on other ports — 11,185
+consecutive failures, all of them needless; that is what `serve`
+exists to prevent.)
+
 It is reached through **builder-ide's judge** (`core/judge`), which is
 where the confidence gate, the escalation ladder and the attempt log
 live. Every ask is recorded as a `judge.verdict` row, including the
@@ -270,19 +280,19 @@ box has to be honest about it:
 - it **yields on the rule, not on the lock**: while the box has less
   than 25 GB free, the builders do not act, and the log says so
   ("yielded: the box has N GB free; the rule is 25 GB");
-- the **decision tick is light** and never takes the lock. The one
-  heavy step the world has — loading the decision model — takes the
-  lease only while it loads, and releases it the moment the model
-  answers (`ops/run-d1.sh`).
+- the **decision tick is light** and never takes a lock. The one
+  heavy step the world has — loading the decision model — goes through
+  the admission daemon, which leases only the load and shares the
+  loaded model with every other seat on the box (`ops/run-d1.sh`).
 
 So live work pre-empts the world without being blocked by it, and the
 world's cost to the rest of the box is bounded and visible.
 
 ---
 
-## 6. The two views
+## 6. The three views
 
-Both are projectors of the same world, in different media.
+All of them are projectors of the same world, in different media.
 
 **The 3D view** (`/`) is prismarine-viewer: the world as a spectator
 sees it, with the builders in it. A "Watcher" joins the world for it —
@@ -303,6 +313,36 @@ steps, taking the first block it meets, and rendering it as a glyph.
 It is not a renderer; it is the same information in a medium a person
 can read at a glance and a decision model can read exactly.
 
+**The voices** (`/voices`) narrate the world as it works: each builder
+has one fixed voice (Pebble `af_heart`, Timber `am_puck`, Kite
+`bm_fable`, Sprout `bf_isabella`), and the model that speaks them —
+Kokoro-82M v1.2 int8, Apache-2.0, the Paradee voices of the brief —
+runs **in the page** through ONNX Runtime Web over wasm. That choice
+is the brief's: no new process on the shared, memory-tight Orin; the
+spectator screen pays for its own voice. Three rules shape it:
+
+- **the feed is the world's own log.** `/events` tails the builders'
+  log and joins each play to its family through the reflex. That log
+  holds decisions and outcomes and has nowhere to put a human's chat
+  or voice (the kids' privacy rule), so there is nothing on the page
+  that could speak a person even by accident.
+- **a voice in the room, not a babble.** One line every four seconds
+  at most, three lines waiting, the oldest dropped first; wins only
+  (a survey that looked around is silence); a follow-agent mode that
+  voices one builder plus the wall — the one build every hand is in —
+  and a mute toggle.
+- **local after the first load.** The page redirects the engine's
+  model fetches to the viewer's own mirror of the model
+  (`viewer/public/paradee/`, not in git; `ops/install-runtime.sh`
+  re-creates and checksums it), so the Orin's Firefox loads 92 MB
+  once from the Thor and never needs the internet again.
+
+The page shows its own numbers: time to first audio per line, last
+and median, and lines spoken. What it cannot show from inside a
+browser — the Orin's CPU and RAM while speaking — is measured the
+first time that page runs on the Orin; the numbers below are from a
+headless chromium on the Thor.
+
 ---
 
 ## 7. What it does not do yet
@@ -319,6 +359,15 @@ can read at a glance and a decision model can read exactly.
 - **the perception spec** — "the mediator authors the perception spec,
   as data, for its fleet" — is not built. The context the builders
   send today is a fixed set of keys.
+- **the voices have not run on the Orin.** The engine is verified in
+  a browser on the Thor; the Orin's own Firefox numbers (time to first
+  audio there, CPU/RAM while speaking) are the first measurement of
+  the day its screen opens the page.
+- **Bedrock joins are unverified.** Geyser + Floodgate are installed
+  and listening on UDP 19132, but Geyser logs a warning that the
+  newest Bedrock clients want ViaVersion against this Paper build.
+  No Bedrock client has joined yet; installing ViaVersion is the
+  documented first step if a tablet cannot.
 - **Luanti is not built.** The brief puts it in a later re-engineering
   phase; what would have to be rebuilt there is written down in
   [`luanti-later.md`](luanti-later.md) and nothing was built for it.
@@ -327,14 +376,68 @@ can read at a glance and a decision model can read exactly.
 
 ## 8. The numbers
 
-Measured on the Thor (aarch64, 122 GB unified memory), with the box
-state beside each number. The box was **shared and busy** during the
-measurement: other seats were running generation jobs, so the load
-average was above the core count, and the world's own numbers are
-therefore a *worst case* rather than a best one.
+Measured on the Thor (aarch64, 122 GB unified memory, 14 cores). The
+box was **shared and busy** during the measurement — another seat was
+running a generation sweep, load average 17–19 against 14 cores — so
+these are worst-case numbers, not best ones.
 
-*(filled in from `ops/bots.sh report` and the world log — see the
-commit message for the run these came from)*
+**The world, on 2026-11-01 at 10:28** (the day the economy was fixed;
+the world itself has been up since 2026-10-31 21:33, interrupted for
+code changes):
+
+| what | the number |
+|---|---|
+| server tick rate (1 m / 5 m / 15 m) | **20.0 / 20.0 / 19.9 TPS** — full rate, with 6 connections (4 builders, the watcher, a probe) |
+| Paper's memory | 2.6 GB resident of a 6 GB heap cap, at `nice 10` |
+| the bots' memory | 0.44 GB for all four builders; the reflex 0.23 GB; the viewer 0.26 GB |
+| d1-2B | served once per box under `thor-admit serve`; ~1 GB resident, on the GPU |
+| the box | 80 GB free while the world ran; the world never yielded a tick to the floor rule |
+| the time ledger | no lease held: the model load leased ~40 s at 09:24 UTC and nothing since |
+
+**The decisions** (the 71 minutes from 09:17 to 10:28, which includes
+three restarts for skill generations and two world-ops teleports):
+
+| what | the number |
+|---|---|
+| d1 latency per pack | **67 ms mean** (2,839 packs would be the count at four builders × one question each per tick; measured on 317 packs in the last restart) |
+| pack failures | 0 since d1 was served through the admission daemon (the previous 11,185 consecutive failures were the reflex asking a port nothing answered on — see §2) |
+| plays per minute, all four builders | ~30 (0.5/s) — the pace is set by the work (a dig, a walk to the depot, a wall play), not by the decisions: d1 answers in 67 ms and waits |
+| pack size | 1.0 question/call — plays stagger, so the batching window (120 ms) rarely catches two builders asking at once; the window is there for when the tick cadence tightens |
+
+**The plays** — the honest split. The ledger holds the whole history,
+including the evening everything failed (a block search that crashed
+on positionless blocks, a place() that could never place, a depot that
+was not standable — see the commits of 2026-11-01):
+
+| window | plays | wins | what was true |
+|---|---|---|---|
+| the whole ledger | 19,105 | 307 | mostly the broken evening; every fix is visible as a bend in this curve |
+| 10:17–10:28, after the last fix | 314 | 30 | Pebble 22 wins in 37 plays (59%), Sprout 6 of 23, Timber 2 of 6; Kite's 248 surveys record as *partial* by design — looking around is its work, and it is not scored as a win |
+
+The sign, read by the mediator at 10:26: **the sign holds.**
+
+**The build**: the wall east of the depot — the one artifact every
+hand is in — laid its first blocks at 10:24, three in its first two
+plays, and grows at the pace of the depot it is fed from (each of
+Timber's wall plays takes up to four blocks out of the pile the
+gatherers leave). It is a slow build on purpose: the community's
+supply line is one gatherer with one pickaxe, not a quarry.
+
+**The voices** (headless chromium on the Thor, 09:38–09:39): the
+engine loaded from the local mirror with zero network errors, and
+spoke 5 lines in the first minute while the builders worked. Time to
+first audio: **12.7 s for the very first line** (the 92 MB model
+loading and its first inference, cold); the page reports per-line
+last and median from there. What these numbers do not yet include —
+the Orin's Firefox and its CPU/RAM while speaking — is the first
+measurement the day that screen opens the page.
+
+**The library**: 51 skills admitted across 11 generations of seed,
+13 live families, every superseded version retired with its reason.
+The cloud mediator has authored none yet: the sign has held since it
+was last read, and a mediator that writes while the sign holds would
+be the babble the design refuses. `ops/bots.sh mediate` is the door
+for the day it fades.
 
 ---
 

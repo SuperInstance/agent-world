@@ -51,14 +51,25 @@ its **Floodgate** companion:
 - Bedrock clients join without an account through Floodgate;
 - a Bedrock client on Floodgate shows as `.<name>` to a Java client.
 
+**One caveat, stated plainly:** no Bedrock client has joined yet, and
+Geyser logs a warning that the newest Bedrock versions may want
+**ViaVersion** against this Paper build. If a tablet cannot connect,
+that plugin is the first thing to add — the warning names it itself.
+
 ### A browser (any device, no Minecraft)
 
 - **the 3D view** — `http://192.168.0.78:8080/` — the world as a
   spectator sees it, with the builders in it;
 - **the text view** — `http://192.168.0.78:8080/ascii` — one
-  perspective projected into characters by an integer kernel.
+  perspective projected into characters by an integer kernel;
+- **the voices** — `http://192.168.0.78:8080/voices` — the world
+  narrated: each builder has one fixed voice, spoken by a small model
+  that runs in the page itself (nothing to install, and after the
+  first load it needs no internet). Click **start the voices**, pick
+  an agent to follow if you like, and the builders' work is spoken as
+  it happens — at most one line every few seconds, with a mute toggle.
 
-Both are on the house network; neither is published.
+All are on the house network; none is published.
 
 ## Running it
 
@@ -68,9 +79,10 @@ Paper jar, the Geyser jar) are installed locally, not system-wide.
 ```bash
 ops/install-runtime.sh     # fetch and check the runtimes (idempotent)
 ops/paper.sh start         # the world
-ops/d1.sh start            # the decision model (shared by all builders)
+ops/d1.sh start            # the decision model (shared once per box,
+                           # through the admission daemon)
 ops/bots.sh start          # the reflex and the four builders
-ops/viewer.sh start        # the 3D view and the text view
+ops/viewer.sh start        # the 3D view, the text view and the voices
 
 ops/paper.sh status        # is it up, on what port, how much memory
 ops/paper.sh logs 40       # the server's log
@@ -132,6 +144,16 @@ taken only while the decision model loads.
 outcomes: what a builder chose, what it did, whether the prediction
 held, and what it cost. Nothing a human said or heard is in it.
 
+## Where it comes from
+
+The stack follows **CraftMind** — the Minecraft bot world Magnus and
+Casey (lucineer) built on a Jetson last winter: mineflayer and
+mineflayer-pathfinder for the agents, a viewer for the screen. This
+world's own additions on top of that shape: the reflex (one d1,
+batched per tick), the skill library held to a closed door, the cloud
+mediator that only writes when the sign fades, the depot economy, and
+the voices that run in the spectator page itself.
+
 ## Licences
 
 - Paper (the server) needs no licence; **each human client needs its
@@ -139,6 +161,7 @@ held, and what it cost. Nothing a human said or heard is in it.
   (accepted for this world by Casey on 2026-10-31).
 - GeyserMC and Floodgate: MIT.
 - mineflayer, prismarine-viewer: MIT.
+- Kokoro-82M v1.2 (the voices): Apache-2.0; onnxruntime-web: MIT.
 - The JDK (Eclipse Temurin) and Node.js: their own licences, in the
   archives under `runtime/dl/`.
 - This repository: MIT.
