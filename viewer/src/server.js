@@ -382,10 +382,26 @@ async function main() {
       } catch (err) {
         continue;
       }
-      if (record.kind !== 'outcome' || !record.bot) continue;
+      if (!record.bot) continue;
+      if (record.kind !== 'outcome' && record.kind !== 'say') continue;
       if (after && String(record.at) <= after) continue;
+      if (record.kind === 'say') {
+        // The builder's own spoken line — its greeting, its answer to a
+        // person, its word about its work. This is what the voices page
+        // speaks. A person's words are never in this log, so there is
+        // nothing here that must not be said aloud (the privacy rule).
+        events.push({
+          kind: 'say',
+          at: record.at,
+          bot: record.bot,
+          text: String(record.text || ''),
+        });
+        if (events.length >= limit) break;
+        continue;
+      }
       const skill = index.get(record.skill) || {};
       events.push({
+        kind: 'outcome',
         at: record.at,
         bot: record.bot,
         role: skill.role || null,

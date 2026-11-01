@@ -68,9 +68,9 @@
 </div>
 <script type="module">
   // The voices, from the agents' own log. The feed (/events) carries
-  // decisions and outcomes only — a human's chat or voice is never in
-  // it, so there is nothing here that must not be spoken (the kids'
-  // privacy rule).
+  // decisions, outcomes, and the builders' own spoken lines — a human's
+  // chat or voice is never in it, so there is nothing here that must
+  // not be spoken (the kids' privacy rule).
 
   // One fixed voice per agent, four agents, four voices.
   const VOICES = {
@@ -237,6 +237,10 @@
   let after = '';
 
   function lineFor(event) {
+    // A builder's own spoken line — its greeting, its answer to a
+    // person, its word about its work — is said as it stands, in that
+    // builder's voice.
+    if (event.kind === 'say') return `${event.bot}: ${event.text}`;
     if (event.result !== 'win') return null;
     if (event.family === 'scout.sight') return null;
     const phrase = PHRASES[event.family];
