@@ -230,12 +230,27 @@ class Chooser:
     # -- the learning ----------------------------------------------------------
 
     def update(self, record: PlayRecord) -> None:
-        """Learn from one play."""
+        """Learn from one play.
+
+        A play with **no reward** — a partial: the skill ran and nothing
+        could be measured — teaches nothing about the win rate, so it
+        changes nothing here. The estimate reflects only the plays that
+        could be scored; a skill whose every play is partial stays at
+        the judge's prior and the choice says ``cold``, which is the
+        honest reading: there is no evidence either way.
+        """
+        if record.reward is None:
+            return
         self.bandit.update(_ArmRecord(record))
 
     def fit(self, records: Sequence[PlayRecord]) -> None:
-        """Refit from the play records — the same computation the night does."""
-        self.bandit.fit([_ArmRecord(r) for r in records])
+        """Refit from the play records — the same computation the night does.
+
+        The same rule as ``update``: a partial play carries no reward and
+        is left out, so a refit from the log lands where the live updates
+        would have.
+        """
+        self.bandit.fit([_ArmRecord(r) for r in records if r.reward is not None])
 
     def stats(self) -> dict[str, Any]:
         stats = dict(self.bandit.stats())

@@ -217,11 +217,26 @@ class PlayRecord(BaseModel):
     candidates: tuple[str, ...] = ()
 
     @property
-    def reward(self) -> float:
-        """The reward the chooser's arithmetic needs: one number."""
+    def reward(self) -> float | None:
+        """The reward the chooser's arithmetic needs: one number, or none.
+
+        A **partial** play — the skill ran, but no sealed prediction
+        could be checked — carries no signal about whether the skill
+        works, so it carries **no reward**. The arithmetic that stood
+        here before scored a partial as 0.5, which read "we could not
+        measure this" as "this wins half the time": a fabricated,
+        constant reward, and a high one — higher than any working
+        gatherer's true rate. A skill that cannot be scored sat at 0.5
+        on every play, taught the bandit nothing, and held its role on
+        a number nobody measured (the scout's survey played 18,066
+        times at exactly 0.5 on 2026-11-01). A partial is not half a
+        win; it is no measurement.
+        """
         if self.outcome.score is not None:
             return float(self.outcome.score)
-        return {"win": 1.0, "partial": 0.5, "lose": 0.0}[self.outcome.result]
+        if self.outcome.result == "partial":
+            return None
+        return {"win": 1.0, "lose": 0.0}[self.outcome.result]
 
 
 class FeedbackPacket(BaseModel):
