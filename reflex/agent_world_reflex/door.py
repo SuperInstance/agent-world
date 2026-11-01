@@ -67,7 +67,7 @@ VOCABULARY: dict[str, str] = {
     "deposit": "put this many of an item into the open chest",
     "withdraw": "take this many of an item out of the open chest",
     "depot": "the community's depot as {x, y, z}: the spot where the builders leave things for each other",
-    "leave_at_depot": "walk to the depot and leave this many of an item there",
+    "leave_at_depot": "walk to the depot and leave things there: a name and a count leaves that many, no arguments leaves everything the bot carries",
     "take_from_depot": "walk to the depot and take what is there; returns how many the bot now has",
 }
 

@@ -96,21 +96,39 @@ function givePathfinding(bot) {
  * hear about.
  */
 async function gotoNear(bot, x, y, z, distance = 2, timeout = 20000) {
+  let settled = false;
   let timer = null;
   try {
     await Promise.race([
-      bot.pathfinder.goto(new goals.GoalNear(x, y, z, distance)),
+      bot.pathfinder.goto(new goals.GoalNear(x, y, z, distance)).then(
+        (value) => {
+          settled = true;
+          return value;
+        },
+        (err) => {
+          settled = true;
+          throw err;
+        }
+      ),
       new Promise((_, reject) => {
         timer = setTimeout(() => reject(new Error('the walk took too long')), timeout);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
-    // Never leave a goal set: a stale goal makes the bot walk on.
-    try {
-      bot.pathfinder.stop();
-    } catch (err) {
-      // The pathfinder may not have been given a goal at all.
+    if (!settled) {
+      // The walk never settled, so cancel it — and give the
+      // cancellation a moment to land. A stop that arrives while the
+      // next walk is starting stops that one instead, and a builder
+      // whose every walk is stopped before it begins is a builder that
+      // stands still forever (probe7: "Path was stopped before it could
+      // be completed", two milliseconds in).
+      try {
+        bot.pathfinder.stop();
+      } catch (err) {
+        // Nothing was running; nothing to stop.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
   }
 }
@@ -143,7 +161,13 @@ function depotSpot(bot) {
   const tree = (block) => CANOPY.has(block.name) || block.name.endsWith('_log');
   for (let y = start + 8; y >= start - 24; y--) {
     const block = bot.blockAt(new Vec3(x, y, z));
-    if (!block || air(block) || tree(block)) continue;
+    if (!block) continue;
+    // Grass, ferns and snow are not a floor: a goal standing on them
+    // can never be reached, and a builder that walks to an unreachable
+    // goal walks to wherever it gave up instead (probe7). Only a block
+    // with a bounding box is ground.
+    if (block.boundingBox === 'empty') continue;
+    if (air(block) || tree(block)) continue;
     return { x, y: y + 1, z };
   }
   return { x, y: start, z };
@@ -231,11 +255,6 @@ function buildApi(bot, counters) {
       return { x: spot.x, y: spot.y, z: spot.z };
     },
     leave_at_depot: async (name, count) => {
-      const item = registry.itemsByName[name];
-      if (!item) return { ok: false, detail: `there is no item called ${name}` };
-      const have = bot.inventory.count(name, null);
-      if (!have) return { ok: false, detail: `the bot has no ${name} to leave` };
-      const wanted = Math.min(Number(count) || have, have);
       const spot = depotSpot(bot);
       try {
         await gotoNear(bot, spot.x, spot.y, spot.z, 0);
@@ -247,17 +266,47 @@ function buildApi(bot, counters) {
       // Toss looking up: a drop thrown forward lands two blocks from
       // the depot and rolls, and the taker's small ring may miss it.
       await bot.lookAt(bot.entity.position.offset(0, 6, 0), true);
-      await bot.toss(item, null, wanted);
-      return { ok: true, detail: `left ${wanted} ${name} at the depot` };
+      if (name === undefined || name === null) {
+        // No name, no argument: leave everything, in one standing —
+        // walking away between items walks back over the pile, and a
+        // bot that picks up what it just left is how the depot stayed
+        // empty while everyone kept delivering to it.
+        for (const item of bot.inventory.items()) {
+          try {
+            await bot.toss(item.type, null, item.count);
+          } catch (err) {
+            // One item that will not leave stays in the bag; the rest go.
+          }
+        }
+      } else {
+        const item = registry.itemsByName[name];
+        if (!item) return { ok: false, detail: `there is no item called ${name}` };
+        const have = bot.inventory.count(name, null);
+        if (!have) return { ok: false, detail: `the bot has no ${name} to leave` };
+        const wanted = Math.min(Number(count) || have, have);
+        await bot.toss(item, null, wanted);
+      }
+      // Step aside, south, and stop: standing on the pile (or walking
+      // back over it) takes it straight back into the bag.
+      try {
+        await gotoNear(bot, spot.x, spot.y, spot.z + 3, 1, 5000);
+      } catch (err) {
+        // The pile keeps whatever distance it can get.
+      }
+      return { ok: true, detail: 'left it at the depot' };
     },
-    take_from_depot: async (name) => {
+    take_from_depot: async (nameOrNames) => {
+      const wanted = (
+        Array.isArray(nameOrNames) ? nameOrNames : [nameOrNames]
+      ).filter((n) => typeof n === 'string' && n);
+      if (!wanted.length) return { ok: false, detail: 'nothing was asked for' };
       const spot = depotSpot(bot);
-      const before = bot.inventory.count(name, null);
-      // The item lands at the gatherer's feet at the depot, which is
-      // within a block or two of the spawn point. So the taker walks a
-      // small ring around the depot and checks what it is holding after
-      // each step: the pickup happens when the bot walks over the item,
-      // and a single walk to the centre is not always close enough.
+      const before = new Map(wanted.map((n) => [n, bot.inventory.count(n, null)]));
+      // One ring around the depot, walked once: the pickup has no filter,
+      // so a single pass collects the whole pile whatever it is, and the
+      // first wanted item that appears ends the walk. (Asking once per
+      // item made a builder pace the depot for minutes while the
+      // gatherers swept the pile back up behind it.)
       const ring = [
         [0, 0], [2, 0], [-2, 0], [0, 2], [0, -2],
         [2, 2], [-2, -2], [2, -2], [-2, 2],
@@ -268,13 +317,15 @@ function buildApi(bot, counters) {
         } catch (err) {
           // Some points are out of reach; the next one may not be.
         }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        const now = bot.inventory.count(name, null);
-        if (now > before) {
-          return { ok: true, count: now, detail: `the bot has ${now} ${name}` };
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        for (const name of wanted) {
+          const now = bot.inventory.count(name, null);
+          if (now > before.get(name)) {
+            return { ok: true, name, count: now, detail: `the bot has ${now} ${name}` };
+          }
         }
       }
-      return { ok: false, count: before, detail: `the depot has no ${name}` };
+      return { ok: false, detail: `the depot has no ${wanted.join(', ')}` };
     },
     find_chest: () => {
       const found = findByIds(
