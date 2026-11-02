@@ -910,6 +910,21 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       const tableBlock = tableId
         ? bot.findBlock({ matching: tableId, maxDistance: 16 })
         : null;
+      // The bench within sixteen is not the bench within REACH: a
+      // recipe found at a table twelve blocks away still has to be
+      // crafted AT it, and a window the server refuses to open for a
+      // bot that stands far off times out after twenty seconds — the
+      // farmer "split logs" every 22 s while every craft failed
+      // silently (the caller did not check, 2026-11-02 21:25Z). Walk
+      // to the bench first; the window opens, the craft lands.
+      if (tableBlock) {
+        try {
+          await gotoNear(bot, tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 3, 10000);
+        } catch (err) {
+          // The walk is best effort; the craft below says its own
+          // truth if the window still will not open.
+        }
+      }
       const recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
       if (!recipes.length) {
         return {

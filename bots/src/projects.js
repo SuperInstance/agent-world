@@ -251,7 +251,10 @@ async function growFarm(agent, project) {
     if (!hoeReady && agent.api.inventory_count('oak_planks') < 4) {
       const logs = agent.bot.inventory.items().filter((i) => i.name.endsWith('_log'));
       if (logs.length) {
-        await agent.api.craft('oak_planks', 4);
+        const split = await agent.api.craft('oak_planks', 4);
+        if (!split.ok) {
+          return { done: false, detail: `the planks would not split: ${split.detail}` };
+        }
         return { done: false, detail: 'split logs for the hoe' };
       }
       const staged = await agent.api.take_from_depot(['oak_log']);
