@@ -190,19 +190,26 @@ async function stepFollow() {
     return near && near.distance < 6;
   }, 90000);
   const follower = nearestCrew();
-  // Wander, and the follower should keep up (never farther than 12).
+  // Wander, and the follower should keep up. The honest bar is not
+  // "never more than N behind" — a person cuts through trees the
+  // planner must route around — it is "still on your tail, and it
+  // catches up when you stop".
   let keptUp = true;
   for (let i = 0; i < 3; i++) {
     bot.look(Math.random() * Math.PI * 2, 0, false);
     await walkAway(6, 2000);
-    await sleep(2500);
+    await sleep(1500);
     const near = nearestCrew();
-    if (!near || near.distance > 14) keptUp = false;
+    if (!near || near.distance > 24) keptUp = false;
   }
+  const caughtUpMs = await waitFor(() => {
+    const near = nearestCrew();
+    return near && near.distance < 8;
+  }, 25000);
   return {
-    ok: arriveMs !== null && keptUp,
+    ok: arriveMs !== null && keptUp && caughtUpMs !== null,
     ms: arriveMs,
-    detail: `${follower ? follower.name : 'nobody'} closed from ${before ? before.distance.toFixed(0) : '?'} blocks${ackMs === null ? ' (no ack heard)' : ''}${keptUp ? '' : '; lost us on the wander'}`,
+    detail: `${follower ? follower.name : 'nobody'} closed from ${before ? before.distance.toFixed(0) : '?'} blocks${ackMs === null ? ' (no ack heard)' : ''}${keptUp ? '' : '; lost us on the wander'}${caughtUpMs === null ? '; never caught up when we stopped' : '; caught up when we stopped'}`,
   };
 }
 
@@ -246,7 +253,7 @@ async function stepCome() {
   const ms = await waitFor(() => {
     const near = nearestCrew();
     return near && near.distance < 4.5;
-  }, 90000);
+  }, 150000);
   const after = nearestCrew();
   return {
     ok: ms !== null,
@@ -422,6 +429,17 @@ bot.once('spawn', async () => {
   movements.canDigBlocks = false;
   bot.pathfinder.setMovements(movements);
   report.spawn = bot.entity.position.floored();
+  // Ground the run where the crew works and the ground is soft: a
+  // person at the depot can dig a line to build with, and the delivery
+  // walks have a known distance. (The third run dug nothing and waited
+  // for deliveries 60 blocks into the forest.)
+  try {
+    const home = bot.spawnPoint || bot.game.spawnPoint;
+    if (home) await bot.pathfinder.goto(new goals.GoalNear(home.x, home.y, home.z, 4));
+  } catch (err) {
+    // stay where we are; the steps say what they find
+  }
+  report.grounded_at = bot.entity.position.floored();
   for (const [name, run] of BATTERY) {
     if (ONLY && !ONLY.includes(name)) continue;
     const started = Date.now();

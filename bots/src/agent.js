@@ -340,20 +340,20 @@ class Agent {
         this.setDuty({ kind: 'follow', player: from, expires: 15 * 60 * 1000 }, `following you, ${from}`);
         return;
       case 'come':
-        this.setDuty({ kind: 'come', player: from, expires: 60 * 1000 }, `coming, ${from}`);
+        this.setDuty({ kind: 'come', player: from, expires: 180 * 1000 }, `coming, ${from}`);
         return;
       case 'help-build':
         if (this.guard) this.guard.ledger.invite(this.name, from, 10);
         this.setDuty({ kind: 'assist', player: from, phase: 'approach', since: new Date().toISOString(), expires: 10 * 60 * 1000 }, `coming, ${from} — show me where to build`);
         return;
       case 'gather-wood':
-        this.setDuty({ kind: 'gather', material: 'wood', player: from, phase: 'fetch', expires: 6 * 60 * 1000 }, `going for wood, ${from}`);
+        this.setDuty({ kind: 'gather', material: 'wood', player: from, phase: 'fetch', expires: 10 * 60 * 1000, tries: 0 }, `going for wood, ${from}`);
         return;
       case 'gather-stone':
-        this.setDuty({ kind: 'gather', material: 'stone', player: from, phase: 'fetch', expires: 6 * 60 * 1000 }, `going for stone, ${from}`);
+        this.setDuty({ kind: 'gather', material: 'stone', player: from, phase: 'fetch', expires: 10 * 60 * 1000, tries: 0 }, `going for stone, ${from}`);
         return;
       case 'go-home':
-        this.setDuty({ kind: 'home', expires: 2 * 60 * 1000 }, 'heading to the depot');
+        this.setDuty({ kind: 'home', expires: 5 * 60 * 1000 }, 'heading to the depot');
         return;
       case 'what-doing': {
         // A person who picked this builder by name is owed the answer
@@ -549,7 +549,24 @@ class Agent {
         return;
       }
       if (!taken || !taken.ok) {
-        this.say(`nothing came of it, ${duty.player} (${duty.how})`, { force: true });
+        // Nothing at the depot: the forest (or the stone) was not where
+        // the skill looked. A person asked, so the gatherer walks to
+        // new ground and looks again — up to three looks, then the
+        // honest "nothing came of it".
+        duty.tries = (duty.tries || 0) + 1;
+        if (duty.tries < 3) {
+          const home = this.api.depot();
+          const angle = Math.random() * Math.PI * 2;
+          const reach = 40 + Math.random() * 30;
+          const x = Math.round(home.x + Math.cos(angle) * reach);
+          const z = Math.round(home.z + Math.sin(angle) * reach);
+          duty.phase = 'fetch';
+          duty.how = taken && taken.detail ? taken.detail : 'nothing at the depot';
+          this.say(`nothing there, ${duty.player} — trying farther out`, { force: true });
+          await this.api.move_to(x, home.y, z);
+          return;
+        }
+        this.say(`nothing came of it, ${duty.player} (${duty.how || 'the ground gave nothing'})`, { force: true });
         this.clearDuty('nothing to deliver');
         return;
       }

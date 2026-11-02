@@ -175,3 +175,33 @@ re-run.
 - Next: the command table and the duties, then restart reflex+bots
   (service.py gains a family= filter so "gather wood" is the chooser's
   wood family, not a model parsing words), then the probes.
+
+- 15:00 UTC: the crew restarted with the command layer live; the join
+  proof passed end to end (TestHuman9: join 0.4 s, greeting 1062 ms,
+  moved 9 blocks, chat, broke coarse_dirt, placed it back; the dig
+  needed look-first/verify-after — the same lesson as the api's).
+  Privacy checked by grep: 0 marked free-text lines in bots.jsonl.
+  Say-lines verified through /events to the voices page; check-views
+  passes all three pages.
+- The command battery found four faults, all fixed (commits e702bdd,
+  40e6548, later): duties died instantly (expires was a duration read
+  as a timestamp); nearest-routing never fired (a player's position is
+  on the entity, not the player list); a paper restart re-armed the
+  whitelist at the door (now AW_PLAYTEST=1 keeps it open, said out
+  loud at every start); the follow re-planned walks to old positions
+  (now GoalFollow holds the person's entity).
+- Bedrock, measured: Geyser shipped with transport "nethernet" (WebRTC
+  only) so RakNet never answered; set to "both". ViaVersion 5.12.3
+  installed (Geyser 2.12.1 targets MC 26.3, the world runs 26.1.2).
+  bedrock-protocol 3.59.0 joins the door and is refused: "Please log
+  into Xbox" under auth-type online/offline/floodgate, reload and two
+  restarts. Anonymous Bedrock is not a thing in this Geyser; signed-in
+  devices are the path, and that path is untested here (no device).
+- gatherer.wood v11 seeded (searches 96 blocks, steps 24 on failure):
+  the night's chopping cleared the spawn forest and v10 searched 24.
+  The gather duty now retries from new ground before giving up.
+- 01:0x UTC: **the Thor dropped off the LAN mid-run** (ping 100%
+  loss from the ProArt while the Orin answers; the box was load ~11,
+  86 GB free). Everything since is staged locally. When it returns:
+  run the final battery, the grief probe, ops/steady.sh 30, fill the
+  playtest note's placeholders, commit.
