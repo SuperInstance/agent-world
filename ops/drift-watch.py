@@ -96,11 +96,11 @@ def log(line: str) -> None:
 def one_window(now: float | None = None) -> int:
     clock = now if now is not None else time.time()
     series = build_series(str(LEDGER))
-    if not series.windows:
-        log("no windows in the ledger yet; nothing to gate")
+    if not series.buckets:
+        log("no buckets in the ledger yet; nothing to gate")
         return 0
     detection = DriftDetector(tuned()).run(series)
-    window = series.windows[-1].at
+    window = series.buckets[-1].start
     # The ladder's plan for the last window, exactly as enforce.py
     # builds it — then the brief's narrowing: soft enforced, the rest
     # dry-run.

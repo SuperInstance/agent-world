@@ -150,16 +150,24 @@ function validate(proposal, proposalKeys_, { playerBuilds = new Map(), buildKeep
 
   // The no-grief rule is not a row in the table: it is the world's
   // standing promise (PLAY.md), and it is checked whatever the keys.
+  // At the project door it is coarse — a person's block inside the
+  // site itself denies the project — because the granular door (the
+  // api's mayPlace, and the site searches that already skip ground
+  // near a person's build) holds every block. A blanket keep-out here
+  // would hand one departed visitor's two blocks a veto over the whole
+  // depot, which is protection nobody asked for (the TestHumanH
+  // finding, 2026-11-02: every council proposal denied, site after
+  // site, until the look learned to search elsewhere).
   const site = proposal.site;
-  if (site && Number.isFinite(site.x)) {
-    const r2 = (site.r || 8) + buildKeepOut;
+  if (site && Number.isFinite(site.x) && playerBuilds.size) {
+    const r2 = (site.r || 4) * (site.r || 4);
     for (const [key, row] of playerBuilds) {
       const [px, py, pz] = key.split(',').map(Number);
       const dx = px - site.x, dy = py - site.y, dz = pz - site.z;
-      if (dx * dx + dy * dy + dz * dz <= r2 * r2) {
+      if (dx * dx + dy * dy + dz * dz <= r2) {
         return {
           type: 'deny',
-          reason: `the site is within ${buildKeepOut} blocks of ${row.by}'s build`,
+          reason: `${row.by}'s ${row.name || 'block'} stands inside that site`,
           matched_precedents: [],
           rule_matches: ['nogrief:player-build'],
         };

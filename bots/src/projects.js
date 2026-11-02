@@ -292,13 +292,20 @@ async function testProject(agent, project) {
 
 // --- the supply duty (the gatherer) ---------------------------------------------
 
-/** What materials does an active project still want from the world? */
+/** What materials does an active project still want from the world?
+ *  Only the gatherable raws: a project may name a crafted thing in
+ *  its bill (a chest), and the answer to that is logs delivered to
+ *  the site and the owner's craft bench — not a want the gatherer can
+ *  carry. */
+const DELIVERABLES = ['oak_log', 'cobblestone', 'oak_sapling', 'wheat_seeds'];
+
 function supplyTarget(board) {
   for (const project of board.list()) {
     if (project.status !== 'active' || !project.owner) continue;
     const staged = project.staged || {};
     const wants = [];
     for (const [name, count] of Object.entries(project.materials || {})) {
+      if (!DELIVERABLES.includes(name)) continue;
       const have = staged[name] || 0;
       if (have < count) wants.push({ name, count: count - have });
     }
@@ -314,15 +321,23 @@ async function supplyStep(agent, board) {
   const { project, wants } = target;
   const want = wants[0];
   const staged = project.staged || {};
-  const inHand = agent.api.inventory_count(want.name);
-
-  const deliverables = ['oak_log', 'cobblestone', 'oak_sapling', 'wheat_seeds'];
-  if (!deliverables.includes(want.name)) return null;
+  // The bill names a canonical item; the world gives what it gives.
+  // A log is a log to the craft bench, so wood is counted and
+  // delivered by its family (the gatherer mined spruce all morning
+  // for a bill that said oak, and the site never saw a log).
+  const FAMILY = {
+    oak_log: ['oak_log', 'spruce_log', 'birch_log', 'cherry_log', 'dark_oak_log', 'pale_oak_log', 'mangrove_log', 'acacia_log', 'jungle_log'],
+    cobblestone: ['cobblestone', 'stone', 'cobbled_deepslate'],
+  };
+  const familyOf = (name) => FAMILY[name] || [name];
+  const inHand = familyOf(want.name).reduce(
+    (sum, name) => sum + agent.api.inventory_count(name), 0
+  );
 
   if (inHand >= want.count) {
     // Carry them to the site and let them go: the owner stands there.
     await standNear(agent, project.site.x, project.site.y, project.site.z);
-    const item = agent.bot.inventory.items().find((i) => i.name === want.name);
+    const item = agent.bot.inventory.items().find((i) => familyOf(want.name).includes(i.name));
     if (!item) return { done: false, detail: `the ${want.name} left the bag` };
     try {
       await agent.bot.toss(item.type, null, Math.min(item.count, want.count));
@@ -336,42 +351,69 @@ async function supplyStep(agent, board) {
     return { done: false, detail: `delivered ${delivered} ${want.name} to ${project.id}` };
   }
 
-  // Fetch: the reflex's own gather families, played and recorded.
+  // Fetch. The gather is direct — into the bag, not through the
+  // library's gather skills, whose honest behaviour is to leave
+  // everything at the depot (a fine end for idle work, and a leak in
+  // a supply run: the gatherer dropped the log at the pile it was
+  // asked to carry past, and the owner waited at the site while the
+  // wood piled up six blocks away). The reflex still owns the idle
+  // ticks; this is a delivery, and the delivery is the plan's.
   if (want.name === 'oak_log') {
-    const decision = await agent.reflex.decide({
-      bot: agent.name,
-      role: agent.role,
-      context: agent.context(),
-      state: agent.worldState(),
-      family: 'gatherer.wood',
-    });
-    if (decision && decision.skill_id) {
-      const record = await agent.play({
-        ...decision,
-        reason: 'project:' + project.id,
-        title: `wood for ${project.title}`,
-      });
-      return { done: false, detail: record.outcome.detail };
+    // The depot pile may already hold what the site wants — the idle
+    // skills drop everything there — and a delivery that walks past a
+    // pile of logs to chop new ones is not a supply chain.
+    const taken = await agent.api.take_from_depot(['oak_log', 'spruce_log', 'birch_log']);
+    if (taken && taken.ok) {
+      return { done: false, detail: `took ${taken.count} ${taken.name} from the depot` };
     }
-    return { done: false, detail: 'the reflex had no wood skill' };
+    const home = agent.api.depot();
+    const near = agent.position();
+    if (!near || Math.hypot(near.x - home.x, near.z - home.z) > 64) {
+      await agent.api.move_to(home.x + 4, home.y, home.z + 4);
+    }
+    const names = ['oak_log', 'spruce_log', 'birch_log', 'cherry_log', 'dark_oak_log', 'pale_oak_log', 'mangrove_log', 'acacia_log', 'jungle_log'];
+    // A tree is only wood if the gatherer can STAND at it. The depot's
+    // two spruces grow on a hill face the planner cannot climb, and a
+    // dig packet the server accepts anyway mines a block whose drop
+    // falls where nobody stands (probe-wood plus the holding counts,
+    // 2026-11-02: "mined spruce_log (holding 0)"). So: walk first, and
+    // only a walk that arrives may dig; a tree that will not be walked
+    // to is tried no longer. Somebody's neighbour (the no-grief
+    // keep-out) is passed by the same door.
+    const tried = [];
+    for (let look = 0; look < 5; look++) {
+      const log = agent.api.find_block({ names, max_distance: 96, any_level: true, exclude: tried });
+      if (!log) return { done: false, detail: 'no tree within reach of the depot' };
+      tried.push(`${log.x},${log.y},${log.z}`);
+      const walked = await agent.api.move_to(log.x, log.y, log.z);
+      if (!walked.ok) continue; // unreachable: the next tree, not the same refusal
+      const dug = await agent.api.dig(log.x, log.y, log.z);
+      if (dug.ok) return { done: false, detail: dug.detail };
+      if (!dug.detail.includes('not mining')) return { done: false, detail: dug.detail };
+    }
+    return { done: false, detail: 'every tree within reach is protected or unreachable' };
   }
   if (want.name === 'cobblestone') {
-    const decision = await agent.reflex.decide({
-      bot: agent.name,
-      role: agent.role,
-      context: agent.context(),
-      state: agent.worldState(),
-      family: 'gatherer.stone',
-    });
-    if (decision && decision.skill_id) {
-      const record = await agent.play({
-        ...decision,
-        reason: 'project:' + project.id,
-        title: `stone for ${project.title}`,
-      });
-      return { done: false, detail: record.outcome.detail };
+    const taken = await agent.api.take_from_depot(['cobblestone', 'stone', 'cobbled_deepslate']);
+    if (taken && taken.ok) {
+      return { done: false, detail: `took ${taken.count} ${taken.name} from the depot` };
     }
-    return { done: false, detail: 'the reflex had no stone skill' };
+    const home = agent.api.depot();
+    const near = agent.position();
+    if (!near || Math.hypot(near.x - home.x, near.z - home.z) > 64) {
+      await agent.api.move_to(home.x + 4, home.y, home.z + 4);
+    }
+    const names = ['stone', 'andesite', 'diorite', 'granite'];
+    const tried = [];
+    for (let look = 0; look < 4; look++) {
+      const stone = agent.api.find_block({ names, max_distance: 48, min_y: 50, exclude: tried });
+      if (!stone) return { done: false, detail: 'no surface stone within reach of the depot' };
+      const dug = await agent.api.dig(stone.x, stone.y, stone.z);
+      if (dug.ok) return { done: false, detail: dug.detail };
+      tried.push(`${stone.x},${stone.y},${stone.z}`);
+      if (!dug.detail.includes('not mining')) return { done: false, detail: dug.detail };
+    }
+    return { done: false, detail: 'every surface stone within reach is protected or unreachable' };
   }
   if (want.name === 'oak_sapling') {
     const leaf = agent.api.find_block({

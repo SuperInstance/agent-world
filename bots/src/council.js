@@ -31,6 +31,7 @@ const DEFAULTS = {
   proposeCooldownMs: 30 * 60 * 1000, // a model proposal at most every half hour
   stallNoteMs: 30 * 60 * 1000, // when a project's silence is worth a note
   stallAbandonMs: 90 * 60 * 1000, // and when it is worth giving up
+  denyCooldownMs: 30 * 60 * 1000, // a denied kind waits before another try
   forestLogsWanted: 8, // trunks near spawn before the forest "is back"
   deepinfra: {
     baseUrl: process.env.AW_DEEPINFRA_URL || 'https://api.deepinfra.com/v1/openai',
@@ -122,15 +123,22 @@ async function modelProposal(board, world, opts, log) {
 function buildProposal(kind, world, extras = {}) {
   const depot = world.depot();
   if (kind === 'depot-chest') {
-    const spot = world.standableNear(depot.x + 3, depot.y, depot.z, 4);
+    // The search reaches past the no-grief keep-out: the depot plateau
+    // carries a departed visitor's two blocks (TestHumanH, 2026-11-02),
+    // and ground near them is not ground we may plan on — but the
+    // chest still belongs "at the depot", within a short walk.
+    const spot = world.standableNear(depot.x + 3, depot.y, depot.z, 14);
     if (!spot) return null;
     return {
       kind,
       title: 'a chest at the depot',
       need: 'goods left on the ground are swept up by whoever walks by',
       site: { x: spot.x, y: spot.y, z: spot.z, r: 4 },
-      scope: { blocks: [{ name: 'chest', x: spot.x, y: spot.y + 1, z: spot.z }] },
-      materials: { chest: 1 },
+      // The chest sits *in* the standable spot (on the ground), not a
+      // block above it: a floating chest has nothing to build against,
+      // and the raw material is logs — the builder crafts the chest.
+      scope: { blocks: [{ name: 'chest', x: spot.x, y: spot.y, z: spot.z }] },
+      materials: { oak_log: 2 },
       owner: 'builder',
     };
   }
@@ -283,6 +291,7 @@ class Council {
     this.timer = null;
     this.lastProgressSeen = new Map(); // project id -> placed
     this.lastProgressAt = new Map();
+    this.deniedAt = new Map(); // kind -> ts (a deny cools the kind)
   }
 
   /** Propose one project through the validator, whatever proposed it. */
@@ -294,9 +303,18 @@ class Council {
     const project = this.board.propose(Object.assign({}, proposal, { proposer }));
     this.board.validated(project.id, verdict);
     if (verdict.type === 'deny') {
+      this.deniedAt.set(proposal.kind, Date.now());
       this.log({ event: 'council_denied', kind: proposal.kind, why: verdict.reason });
     }
     return project;
+  }
+
+  /** A kind the validator denied lately is not re-proposed every
+   *  minute: the deny is a verdict about the world (a site that will
+   *  not pass), and the world does not change that fast. */
+  kindCooling(kind) {
+    const at = this.deniedAt.get(kind) || 0;
+    return Date.now() - at < this.opts.denyCooldownMs;
   }
 
   /** One council tick. Returns what it did, for the tests. */
@@ -337,6 +355,7 @@ class Council {
         .list()
         .some((p) => p.kind === proposal.kind && p.status !== 'abandoned');
       if (onBoard) continue;
+      if (this.kindCooling(proposal.kind)) continue;
       const project = this.propose(proposal, 'council');
       if (project) {
         did.proposed.push(project.id);

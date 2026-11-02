@@ -88,7 +88,7 @@ test('the council proposes through the validator, one of a kind', async () => {
   assert.equal(again.proposed.length, 0);
 });
 
-test('a site beside a person build is denied at the council door', async () => {
+test("a person's block inside the site denies it at the council door", async () => {
   const board = tmpBoard();
   const playerBuilds = () => new Map([['4,71,1', { by: 'Casey', name: 'coarse_dirt' }]]);
   const council = new Council(board, stubWorld({ chest: false, logs: 30, farmland: true }), {
@@ -98,7 +98,7 @@ test('a site beside a person build is denied at the council door', async () => {
   const did = await council.tick({ allowModel: false });
   const project = board.get(did.proposed[0]);
   assert.equal(project.status, 'abandoned');
-  assert.match(project.verdict.reason, /Casey's build/);
+  assert.match(project.verdict.reason, /Casey's/);
 });
 
 test("a busy owner's need waits: one project per role", async () => {

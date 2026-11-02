@@ -283,3 +283,38 @@ re-run.
   `what are you building?`, `build a farm`, `plant trees`,
   `build a chest`, `build a shelter` — a person's request becomes a
   proposal through the same validator (a deny is said plainly).
+
+- 06:41–07:47 UTC — The loop's first live hour, and what it taught:
+  the world held TPS 20.0 while the council proposed, the validator
+  denied, and the crew worked. Six faults found and fixed (commit
+  follows): the blanket keep-out handed a departed visitor's two
+  blocks a veto over the whole depot (site searches exclude that
+  ground now; the coarse deny fires only on a block inside the
+  site; denied kinds cool 30 min); the chest scope floated a block
+  and billed a finished chest; the library gather skills drop
+  everything at the depot so a supply run through them carried
+  nothing (the supply fetch gathers straight into the bag);
+  oak/spruce is one family to a delivery; "mined" is not "holding"
+  (the hillside spruces are a climb the planner refuses — walk
+  first, dig only where you stand, `exclude` the refusals); and the
+  pit still owned all four builders (Pebble y=8, Timber y=48, Kite
+  y=32, Sprout y=64 — lifted by console tp; the pathfinder now holds
+  the y=48 floor too, with an escape clause for a builder already
+  deep).
+- 07:43 UTC — **the drift detector's first live hold**: Pebble's
+  success-rate signal fired, the watcher wrote the soft hold to the
+  pause file, the reflex refused its asks ("paused: drift pause
+  (soft)"), and — once the bots learned to read the pause file too —
+  Pebble held its own work with a `drift_hold` note. The whole of
+  §3.5's soft level, live and unattended.
+- The watchers are detached: `ops/drift-watch.sh` (one window every
+  5 min, soft enforced, tier/hard dry-run) and
+  `ops/community-watch.sh` (a sample a minute into
+  runtime/logs/community-20261102.csv, hourly rollups).
+- An honest correction (DOC-RULES 5): the playtest note's "the
+  deforested spawn" stands for oak — but the world is not woodless;
+  two mature spruces stand 6 blocks from the depot (506 log blocks
+  within 96, probe-wood.js). The first probe read "no wood" by
+  scanning before its chunks settled, and the level-bound search
+  could not see trunks 8 blocks up a hill. Both lessons are in the
+  g15 seed's provenance.

@@ -464,17 +464,26 @@ class Agent {
     movements.allow1by1towers = false;
     movements.allowParkour = false;
     this.bot.pathfinder.setMovements(movements);
-    if (this.guard) {
-      try {
-        const plain = movements.safeToBreak.bind(movements);
-        movements.safeToBreak = (block) => {
-          if (!plain(block)) return false;
-          if (!block || !block.position) return true;
-          return this.guard.mayDig(block.position).ok;
-        };
-      } catch (err) {
-        // The planner's own rule stands; the api's guard still holds.
-      }
+    // The depth floor, on the road as well as at the workface: the
+    // crew mined itself into pits twice over (Pebble at bedrock for
+    // hours; Kite found at y=32 a day later), and the planner was the
+    // last door still open — a walk "east" would happily dig down
+    // through a cave roof. No path may dig below y=48 — unless the
+    // builder is already deep, when digging is the way *up* and the
+    // floor would trap the very bot it protects.
+    const floorY = 48;
+    const deep = () => this.bot.entity && this.bot.entity.position.y < floorY - 3;
+    try {
+      const plain = movements.safeToBreak.bind(movements);
+      movements.safeToBreak = (block) => {
+        if (!plain(block)) return false;
+        if (!block || !block.position) return true;
+        if (block.position.y < floorY && !deep()) return false;
+        if (this.guard) return this.guard.mayDig(block.position).ok;
+        return true;
+      };
+    } catch (err) {
+      // The planner's own rule stands; the api's guard still holds.
     }
   }
 
@@ -819,6 +828,28 @@ class Agent {
       }
     }
     this.ticks += 1;
+
+    // The drift detector's hold (§3.5 soft): this builder waits on its
+    // own safe branch and stops committing — the reflex refuses its
+    // asks already; the project path must not route around the hold.
+    // A person's duty (above) still ranks: a held builder still answers
+    // a person, because the promises in PLAY.md outrank the detector.
+    if (this.shared && this.shared.pauseFor) {
+      const hold = this.shared.pauseFor(this.name);
+      if (hold) {
+        this.interrupt();
+        if (!this._holdNotedAt || Date.now() - this._holdNotedAt > 60000) {
+          this._holdNotedAt = Date.now();
+          this.log.note({
+            bot: this.name,
+            event: 'drift_hold',
+            level: hold.level || 'soft',
+            reason: hold.reason || '',
+          });
+        }
+        return;
+      }
+    }
 
     // The community's own work: a ratified project for this role is
     // served before the reflex is asked, because the plan — the

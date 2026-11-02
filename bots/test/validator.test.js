@@ -57,11 +57,11 @@ test('a material the world cannot gather asks a human', () => {
   assert.match(verdict.reason, /materials:gatherable/);
 });
 
-test('the no-grief rule denies a site beside a person build, whatever the keys', () => {
+test('the no-grief rule denies a site over a person block, whatever the keys', () => {
   const playerBuilds = new Map([['5,71,1', { by: 'Casey', name: 'coarse_dirt', at: '2026-11-02T00:00:00Z' }]]);
   const verdict = validate(base, proposalKeys(base), { playerBuilds, buildKeepOut: 8 });
   assert.equal(verdict.type, 'deny');
-  assert.match(verdict.reason, /Casey's build/);
+  assert.match(verdict.reason, /Casey's .* stands inside that site/);
   assert.ok(verdict.rule_matches.includes('nogrief:player-build'));
 });
 

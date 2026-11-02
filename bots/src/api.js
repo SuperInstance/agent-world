@@ -40,17 +40,19 @@ const TICK_MS = 50; // a Minecraft tick is 1/20 s
  * and the level filter — a block the builder cannot reach is not a
  * block it can work on — is applied to the results.
  */
-function findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY) {
+function findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY, exclude) {
   const ids = [];
   for (const name of names) {
     const block = registry.blocksByName[name];
     if (block) ids.push(block.id);
   }
+  const skip = new Set(exclude || []);
   const spots = bot.findBlocks({ matching: ids, maxDistance, count: 96 });
   for (const spot of spots) {
     if (!anyLevel && Math.abs(spot.y - feet.y) > 2) continue;
     if (minY != null && spot.y < minY) continue;
     if (maxY != null && spot.y > maxY) continue;
+    if (skip.size && skip.has(`${spot.x},${spot.y},${spot.z}`)) continue;
     const block = bot.blockAt(spot);
     if (block) return block;
   }
@@ -379,9 +381,14 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       // depth-minding searches use it (surface stone, not bedrock).
       const minY = Number.isFinite(q.min_y) ? q.min_y : null;
       const maxY = Number.isFinite(q.max_y) ? q.max_y : null;
+      // `exclude` (["x,y,z", ...]): candidates a caller already tried
+      // and was refused — the guard's keep-out can own the nearest
+      // tree, and the honest gather moves on to the next one instead
+      // of mining the same refusal forever.
+      const exclude = Array.isArray(q.exclude) ? q.exclude : null;
       let found = null;
       if (names) {
-        found = findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY);
+        found = findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY, exclude);
       } else {
         // Any block at all: the name-less search keeps the function
         // matcher, which scans the neighbourhood itself.

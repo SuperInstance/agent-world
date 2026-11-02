@@ -20,10 +20,32 @@ const AIR = (block) =>
   !block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air';
 
 class WorldLook {
-  /** @param {() => Array} agents the live agents (each with .bot) */
-  constructor(agents, guard = null) {
+  /**
+   * @param {() => Array} agents the live agents (each with .bot)
+   * @param {object|null} guard one agent's guard (for chest checks)
+   * @param {() => Map} playerBuilds the no-grief ledger's placed map,
+   *   so a site search never plans a block the workface would refuse
+   */
+  constructor(agents, guard = null, playerBuilds = null) {
     this.agents = agents;
     this.guard = guard;
+    this.playerBuilds = playerBuilds || (() => new Map());
+    this.keepOut = 8; // BUILD_KEEP_OUT from humanity.js, held here too
+  }
+
+  /** Is a point inside a person's build radius? (A plan that includes
+   *  such a point plans a block the api will refuse; better not to
+   *  plan it.) */
+  _nearPlayerBuild(x, y, z) {
+    const placed = this.playerBuilds();
+    if (!placed || !placed.size) return false;
+    const r2 = (this.keepOut + 1) * (this.keepOut + 1);
+    for (const key of placed.keys()) {
+      const [px, py, pz] = key.split(',').map(Number);
+      const dx = px - x, dy = py - y, dz = pz - z;
+      if (dx * dx + dy * dy + dz * dz <= r2) return true;
+    }
+    return false;
   }
 
   _bot() {
@@ -84,6 +106,7 @@ class WorldLook {
           const at = this.blockAt(x + dx, ground + 1, z + dz);
           const above = this.blockAt(x + dx, ground + 2, z + dz);
           if (AIR(at) && AIR(above) && ground >= y - 12) {
+            if (this._nearPlayerBuild(x + dx, ground, z + dz)) continue;
             return { x: x + dx, y: ground + 1, z: z + dz };
           }
         }
@@ -158,6 +181,7 @@ class WorldLook {
           const at = this.blockAt(x + dx, ground + 1, z + dz);
           if (!block || !['grass_block', 'dirt', 'coarse_dirt'].includes(block.name)) continue;
           if (!AIR(at)) continue;
+          if (this._nearPlayerBuild(x + dx, ground, z + dz)) continue;
           out.push({ x: x + dx, y: ground, z: z + dz });
         }
       }
@@ -165,38 +189,45 @@ class WorldLook {
     return out;
   }
 
-  /** A 5x5 farm plot near water if there is one, else on open dirt. */
+  /** A 5x5 farm plot near water if there is one, else on open dirt.
+   *  Every candidate centre is tried until one yields a 3x3 of
+   *  tillable, unclaimed columns — the depot's water sits beside a
+   *  departed visitor's two blocks, and the first centre is not the
+   *  only farm in the world. */
   farmPlot(x, y, z, radius) {
-    // Water first: crops beside water do not need the rain.
     const bot = this._bot();
     if (!bot) return null;
+    const centers = [];
     const waterId = bot.registry.blocksByName['water'] && bot.registry.blocksByName['water'].id;
-    let center = null;
     if (waterId) {
-      const spots = bot.findBlocks({ matching: [waterId], maxDistance: radius + 24, count: 8 });
-      const near = spots.find((s) => Math.hypot(s.x - x, s.z - z) <= radius);
-      if (near) center = { x: near.x + 2, z: near.z };
-    }
-    if (!center) {
-      const spot = this.standableNear(x, y, z, radius);
-      if (!spot) return null;
-      center = { x: spot.x, z: spot.z };
-    }
-    const blocks = [];
-    let ok = 0;
-    for (let dx = -2; dx <= 2; dx++) {
-      for (let dz = -2; dz <= 2; dz++) {
-        const ground = this.surfaceAt(center.x + dx, center.z + dz);
-        if (ground == null) continue;
-        const block = this.blockAt(center.x + dx, ground, center.z + dz);
-        if (!block || !['grass_block', 'dirt', 'coarse_dirt'].includes(block.name)) continue;
-        ok += 1;
-        blocks.push({ name: 'farmland', x: center.x + dx, y: ground, z: center.z + dz });
-        blocks.push({ name: 'wheat', x: center.x + dx, y: ground + 1, z: center.z + dz });
+      const spots = bot.findBlocks({ matching: [waterId], maxDistance: radius + 24, count: 16 });
+      for (const s of spots) {
+        if (Math.hypot(s.x - x, s.z - z) <= radius) centers.push({ x: s.x + 2, z: s.z });
       }
     }
-    if (ok < 9) return null; // a farm wants at least a 3x3 of tillable ground
-    return { x: center.x, y, z: center.z, blocks };
+    const open = this.standableNear(x, y, z, radius);
+    if (open) centers.push({ x: open.x, z: open.z });
+    const farther = this.standableNear(x, y, z, radius + 12);
+    if (farther) centers.push({ x: farther.x, z: farther.z });
+
+    for (const center of centers) {
+      const blocks = [];
+      let ok = 0;
+      for (let dx = -2; dx <= 2; dx++) {
+        for (let dz = -2; dz <= 2; dz++) {
+          const ground = this.surfaceAt(center.x + dx, center.z + dz);
+          if (ground == null) continue;
+          const block = this.blockAt(center.x + dx, ground, center.z + dz);
+          if (!block || !['grass_block', 'dirt', 'coarse_dirt'].includes(block.name)) continue;
+          if (this._nearPlayerBuild(center.x + dx, ground, center.z + dz)) continue;
+          ok += 1;
+          blocks.push({ name: 'farmland', x: center.x + dx, y: ground, z: center.z + dz });
+          blocks.push({ name: 'wheat', x: center.x + dx, y: ground + 1, z: center.z + dz });
+        }
+      }
+      if (ok >= 9) return { x: center.x, y, z: center.z, blocks };
+    }
+    return null;
   }
 
   /** Cobblestone on the surface along the line to (tx, tz), one block
@@ -213,6 +244,7 @@ class WorldLook {
       if (ground == null) continue;
       const at = this.blockAt(px, ground, pz);
       if (!at) continue;
+      if (this._nearPlayerBuild(px, ground, pz)) continue;
       if (['grass_block', 'dirt', 'coarse_dirt', 'sand', 'gravel'].includes(at.name)) {
         // Replace the walk-worn ground itself: the path sits *in* the
         // world, not on a step above it.

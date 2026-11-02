@@ -170,12 +170,13 @@ async function main() {
     process.env.AW_BOARD_SNAPSHOT || path.join(runtimeDir, 'board.json'),
     (row) => log.note(row)
   );
-  const worldLook = new WorldLook(() => agents, agents[0] ? agents[0].guard : null);
+  const playerBuilds = () => {
+    const guard = agents[0] && agents[0].guard;
+    return guard && guard.ledger ? guard.ledger.placed : new Map();
+  };
+  const worldLook = new WorldLook(() => agents, agents[0] ? agents[0].guard : null, playerBuilds);
   const council = new Council(board, worldLook, {
-    playerBuilds: () => {
-      const guard = agents[0] && agents[0].guard;
-      return guard && guard.ledger ? guard.ledger.placed : new Map();
-    },
+    playerBuilds,
     log: (row) => log.note(row),
   });
   const projects = new ProjectService({ board, log: (row) => log.note(row) });
@@ -201,7 +202,34 @@ async function main() {
     return `on the board, ${from}: ${project.title} — the crew will pick it up`;
   };
 
-  const shared = { board, world: worldLook, council, projects, proposeFromHuman };
+  // The drift pause file, read by the world itself (the reflex already
+  // reads it at its decision seam; a held agent must not route around
+  // the hold through the project service either). Read-only, cached
+  // briefly, and a missing or malformed file is never a pause.
+  const pauseFile = process.env.AW_DRIFT_PAUSE || path.join(runtimeDir, 'drift-pause.json');
+  const pauseState = { at: 0, holds: new Map() };
+  const pauseFor = (name) => {
+    const fs = require('node:fs');
+    const now = Date.now();
+    if (now - pauseState.at > 5000) {
+      pauseState.at = now;
+      pauseState.holds = new Map();
+      try {
+        const doc = JSON.parse(fs.readFileSync(pauseFile, 'utf8'));
+        const clock = now / 1000;
+        for (const [actor, entry] of Object.entries(doc || {})) {
+          if (!entry || typeof entry !== 'object') continue;
+          if (entry.until != null && Number(entry.until) < clock) continue;
+          pauseState.holds.set(actor, entry);
+        }
+      } catch (err) {
+        // No pause was ever invented from a read error.
+      }
+    }
+    return pauseState.holds.get(name) || pauseState.holds.get('world') || null;
+  };
+
+  const shared = { board, world: worldLook, council, projects, proposeFromHuman, pauseFor };
   for (const agent of agents) agent.shared = shared;
   council.start();
 
