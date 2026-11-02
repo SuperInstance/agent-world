@@ -838,6 +838,30 @@ class Agent {
       const hold = this.shared.pauseFor(this.name);
       if (hold) {
         this.interrupt();
+        // Ask the reflex anyway: its refusal is recorded there as a
+        // drift.yield, and a yield is what excuses the wait in the
+        // detector's stall signal. A silent hold looks exactly like a
+        // stall — the first live hold renewed itself on its own
+        // silence (07:58 UTC, "drift signal stall+success") until the
+        // ask came back.
+        //
+        // Once every 30 s, not every tick: the detector's windows are
+        // minutes wide, so a yield every half-minute keeps the window
+        // covered without writing a row per tick to the log of record.
+        const now = Date.now();
+        if (!this._holdAskedAt || now - this._holdAskedAt > 30000) {
+          this._holdAskedAt = now;
+          try {
+            await this.reflex.decide({
+              bot: this.name,
+              role: this.role,
+              context: this.context(),
+              state: this.worldState(),
+            });
+          } catch (err) {
+            // The refusal is the point, not the answer.
+          }
+        }
         if (!this._holdNotedAt || Date.now() - this._holdNotedAt > 60000) {
           this._holdNotedAt = Date.now();
           this.log.note({
