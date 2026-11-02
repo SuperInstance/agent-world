@@ -986,11 +986,21 @@ async function approach(bot, position) {
  * enough. Looking for the item entity instead is fragile — the entity
  * names have changed across versions — and the block's position is
  * known exactly.
+ *
+ * The range is 0, not 1: standing BESIDE the dug cell leaves the bot
+ * at the edge of the server's pickup reach (probe-stone-drop.js,
+ * 2026-11-02: a cobble entity lay at distance 1.0 for 3+ s while the
+ * bot stood still; the run before, the same dig auto-picked-up). The
+ * cell is air once the block is broken, so the bot stands inside it
+ * and the drop has no escape. "Stone drops nothing" (day two) was
+ * this: the digs were at reach, the drops landed on the ground, and
+ * range-1 collection missed them — /loot mine and a feet-adjacent dig
+ * both yield cobblestone.
  */
 async function collectAt(bot, position) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await gotoNear(bot, position.x, position.y, position.z, 1);
+      await gotoNear(bot, position.x, position.y, position.z, 0);
     } catch (err) {
       // The block's own cell cannot be stood beside — a trunk up a
       // face, a log on a ledge — but the DROP is not the block: it
