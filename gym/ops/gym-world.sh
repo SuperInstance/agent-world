@@ -48,7 +48,19 @@ warn() { printf '\033[33m!!\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31mxx\033[0m %s\n' "$*" >&2; exit 1; }
 
 running_pids() {
-  pgrep -af "[j]ava .*-jar .*paper-.*\.jar" 2>/dev/null | grep -F "$SANDBOX" | awk '{print $1}' || true
+  # The world's own command line does not carry the sandbox: the server
+  # is started with `cd $SANDBOX && exec java -jar ...`, so the path is in
+  # the process's **working directory**, not in its arguments. Reading
+  # /proc/*/cwd is what finds it; matching the jar's command line would
+  # find the community's world and voyager-port's sandbox too.
+  local pid cwd
+  for pid in /proc/[0-9]*; do
+    pid="${pid#/proc/}"
+    cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+    case "$cwd" in
+      "$SANDBOX") echo "$pid" ;;
+    esac
+  done
 }
 
 # --- the private configuration ------------------------------------------------
