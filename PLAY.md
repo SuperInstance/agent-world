@@ -12,15 +12,19 @@ ground, plants). They keep working whether you are there or not.
 | | |
 |---|---|
 | **Java (the laptop)** | Minecraft Java **26.1** (the current release) → Multiplayer → Direct Connection → `192.168.0.78:25565` |
-| **Bedrock (tablets, phones)** | Minecraft Bedrock → Play → Servers → Add Server → address `192.168.0.78`, port `19132` (UDP) |
+| **Bedrock (tablets, phones)** | Minecraft Bedrock → Play → Servers → Add Server → address `192.168.0.78`, port `19132` (UDP). **The device must be signed into its Xbox/Microsoft account** — Bedrock itself requires that for online play, and our bridge honours it; a free account is enough, and no Java copy is needed |
 | **Watch instead** | `http://192.168.0.78:8080/` — the 3D view from any browser; `http://192.168.0.78:8080/ascii` is the same world in text; `http://192.168.0.78:8080/voices` speaks the agents' lines |
 
-No accounts are needed for Bedrock through our door (Geyser + Floodgate
-bridge it to the Java world; your name gets a small mark in front of
-it). Java needs its own account as usual. If a recent Bedrock client is
-refused, tell us the exact version number on the title screen — there
-is a ViaVersion-style plugin for exactly that, and it is a five-minute
-fix on our side.
+No Java account is needed for our LAN door (the server is offline-mode).
+Bedrock joins arrive through Geyser + Floodgate; the name gets a small
+mark in front of it (`.` or `*`). One honest limit, measured on
+2026-11-02: an *anonymous* Bedrock client (no Xbox sign-in) is refused
+with "Please log into Xbox to join this server" — Geyser 2.12.1 takes
+no unauthenticated Bedrock sessions whatever the config says. Real
+signed-in devices are the supported path. If a recent Bedrock client is
+rejected over its *version*, ViaVersion is already installed to bridge
+(Geyser 2.12.1 targets Minecraft 26.3; the world runs 26.1.2) — tell us
+the version number on the title screen.
 
 ## Talking to the agents
 
