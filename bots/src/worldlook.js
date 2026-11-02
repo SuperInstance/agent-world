@@ -209,6 +209,20 @@ class WorldLook {
     if (open) centers.push({ x: open.x, z: open.z });
     const farther = this.standableNear(x, y, z, radius + 12);
     if (farther) centers.push({ x: farther.x, z: farther.z });
+    // A ring of candidates around the depot. The three centres above
+    // are all *near the depot*, and the depot is where a visitor built
+    // two blocks on 2026-11-02 — so the ground there is inside the
+    // no-grief keep-out and the plot search found nothing, and the
+    // community had no farm to plant (the council's need list came
+    // back with the farm missing from it, and the board never said
+    // why). A farm does not have to be in the depot's own square: it
+    // has to be somewhere the crew can reach and the ground is free.
+    for (const r of [10, 14, 18, 22, 26, 30, 34, 38]) {
+      if (r > radius) break;
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) {
+        centers.push({ x: x + dx * r, z: z + dz * r });
+      }
+    }
 
     for (const center of centers) {
       const blocks = [];

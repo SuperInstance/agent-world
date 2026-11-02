@@ -393,10 +393,17 @@ async function supplyStep(agent, board) {
     // Two rules keep the hunt short, because a long hunt is a long
     // silence and the detector reads a long silence as a stall:
     //
-    // * the search looks for wood **at the gatherer's own level**
-    //   (max_y: the feet plus two). A log ten blocks up a hillside is
-    //   found, walked to, and refused — the walk never arrives, and
-    //   each attempt costs the whole walk budget.
+    // * the search looks for wood **within a band above the feet**
+    //   (max_y: the feet plus twelve — a terrace or two up, never the
+    //   canopy). The feet-plus-two band of 2026-11-02 went blind the
+    //   moment the gatherer stood in the depot gully: Pebble at y=61,
+    //   every standing log at y=64-70 (probe-crew-wood.js), and the
+    //   hunt answered "no tree within reach" while logs stood seven
+    //   blocks away — the community starved on a window. The band
+    //   still excludes the hillside canopy ten blocks up (y=83-86),
+    //   and the nearest-first ordering (api.js) tries the gully-edge
+    //   logs long before any climb; a walk that does not arrive is
+    //   excluded and the next-nearest is tried.
     // * a tree inside somebody's keep-out is **skipped without a
     //   walk**: the guard knows before the feet move, and the refuse
     //   is free.
@@ -407,7 +414,7 @@ async function supplyStep(agent, board) {
         names,
         max_distance: 96,
         any_level: true,
-        max_y: Math.round(feet.y) + 2,
+        max_y: Math.round(feet.y) + 12,
         exclude: tried,
       });
       if (!log) return { done: false, detail: 'no tree within reach of the depot' };

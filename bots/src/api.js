@@ -48,7 +48,18 @@ function findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY
   }
   const skip = new Set(exclude || []);
   const spots = bot.findBlocks({ matching: ids, maxDistance, count: 96 });
-  for (const spot of spots) {
+  // The **nearest** candidate comes first. `findBlocks` returns its
+  // matches in no particular order, and the order decided which tree
+  // the gatherer walked to: on 2026-11-02 it walked to the spruce on
+  // the hillside (y=83-86, thirteen blocks up) and refused the walk,
+  // while six oak logs stood at the depot's own level — two of them
+  // within two blocks of the gatherer's feet.
+  const ordered = spots.slice().sort((a, b) => {
+    const da = (a.x - feet.x) ** 2 + (a.y - feet.y) ** 2 + (a.z - feet.z) ** 2;
+    const db = (b.x - feet.x) ** 2 + (b.y - feet.y) ** 2 + (b.z - feet.z) ** 2;
+    return da - db;
+  });
+  for (const spot of ordered) {
     if (!anyLevel && Math.abs(spot.y - feet.y) > 2) continue;
     if (minY != null && spot.y < minY) continue;
     if (maxY != null && spot.y > maxY) continue;
