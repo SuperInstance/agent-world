@@ -89,10 +89,103 @@ class WorldLook {
       const block = this.blockAt(x, y, z);
       if (!block) continue; // outside the loaded chunks: unknown
       if (AIR(block) || block.boundingBox === 'empty') continue;
-      if (block.name === 'oak_leaves' || block.name.endsWith('_log')) continue;
+      // Any tree's canopy is not the ground: spruce leaves counted as
+      // surface made the whole spawn slope read as a y69 plateau
+      // (probe, 2026-11-02) and the ramp planner refuse a gully it
+      // could not see.
+      if (block.name.endsWith('_leaves') || block.name.endsWith('_log')) continue;
       return y;
     }
     return null;
+  }
+
+  /** The lowest cell a crew member stands on, or null. The pit the
+   *  gatherer cannot walk out of is where the gatherer stands — the
+   *  spawn pocket by the depot, rimmed by the old wall (day one:
+   *  every restart landed the crew at its floor and the walks out
+   *  died at the rim). */
+  lowestStand() {
+    let lowest = null;
+    for (const agent of this.agents()) {
+      if (!agent.bot || !agent.bot.entity) continue;
+      const p = agent.bot.entity.position;
+      if (!lowest || p.y < lowest.y) {
+        lowest = { x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) };
+      }
+    }
+    return lowest;
+  }
+
+  /** A staircase of steps from (x0,y0,z0) — a standing level, the
+   *  trapped agent's own feet, not surfaceAt (the pit's own column can
+   *  carry an overhang, and its topmost solid is the roof, not the
+   *  floor) — up to the standing level at (x1,z1). Each step is a
+   *  cell carved down to the current standing level, so the stand on
+   *  it is one block up — terraform, not construction: the old wall
+   *  itself becomes the staircase. An empty list means the line
+   *  already walks; null means it cannot be planned honestly (ground
+   *  unknown, or the rise needs more carving than the caps allow).
+   *  Whether the community owes a ramp at all is the board's word — a
+   *  done ramp stays on the board and the tick does not re-propose a
+   *  kind it already carries. */
+  rampSteps(x0, y0, z0, x1, z1, { maxSteps = 10, maxCarve = 6 } = {}) {
+    const goal = this.surfaceAt(x1, z1);
+    if (goal == null || y0 >= goal) return [];
+    const plan = [];
+    const walk = (x, z, feet) => {
+      // One cell: its natural top T stands at T+1. At or below the
+      // current stand it walks; above it, the step's target top is the
+      // current stand, so standing on the carved cell is feet+1 — a
+      // single block of gain, whatever the wall was made of.
+      const top = this.surfaceAt(x, z);
+      if (top == null) return null; // unknown ground: no honest scope
+      if (top <= feet) return { feet: top + 1, carve: 0 };
+      if (top - feet > maxCarve) return null; // a taller face is a different project
+      return { feet: feet + 1, carve: top - feet };
+    };
+    let feet = y0;
+    const line = Math.max(Math.abs(x1 - x0), Math.abs(z1 - z0));
+    // The line first, then the cells around the goal, where the last
+    // of the climb usually lives (the wall stands at the line's end,
+    // and the steps that climb it are beside the goal, not on it).
+    // Later passes re-walk the cells tallest-first, because a dip on
+    // the line can undo a gain and the wall's own cells are the
+    // steps: each carved cell gives one block of standing, once.
+    const ring = [[0, 1], [1, 0], [0, -1], [-1, 0]].map(([dx, dz]) => [x1 + dx, z1 + dz]);
+    const cells = [];
+    for (let s = 1; s <= line; s++) {
+      cells.push([Math.round(x0 + ((x1 - x0) * s) / line), Math.round(z0 + ((z1 - z0) * s) / line)]);
+    }
+    cells.push(...ring);
+    const inPlan = new Set();
+    for (let pass = 0; pass < 3 && feet < goal; pass++) {
+      const order = pass === 0
+        ? cells
+        : cells
+          .slice()
+          .sort(
+            (a, b) =>
+              (this.surfaceAt(b[0], b[1]) ?? -99) - (this.surfaceAt(a[0], a[1]) ?? -99)
+          );
+      for (const [x, z] of order) {
+        if (feet >= goal) break;
+        if (inPlan.has(`${x},${z}`)) continue;
+        const step = walk(x, z, feet);
+        if (step === null) {
+          if (pass === 0) return null; // unknown ground: no honest scope
+          continue;
+        }
+        if (step.carve > 0) {
+          // a step carved into a cell that stood too high: its target
+          // top is the current stand, so the next stand is one up
+          plan.push({ x, z, top: feet });
+          inPlan.add(`${x},${z}`);
+          if (plan.length > maxSteps) return null;
+        }
+        feet = step.feet;
+      }
+    }
+    return feet >= goal ? plan : null;
   }
 
   /** A standable spot near (x, z): ground with two airs above it. */
@@ -137,6 +230,26 @@ class WorldLook {
   }
 
   /** Is there a chest (not a person's) near the point? */
+  /** Is there a crafting table within crafting reach of the point?
+   *  The same 16 the craft-time check uses (api.craft's findBlock),
+   *  so a bill that counts a bench is a bill for a site that has
+   *  none — the bench at the depot serves every proposal near it. */
+  benchNear(x, y, z) {
+    const bot = this._bot();
+    if (!bot) return false;
+    const id = bot.registry.blocksByName['crafting_table']
+      && bot.registry.blocksByName['crafting_table'].id;
+    if (!id) return false;
+    // findBlocks measures from the bot, not the point, so the search
+    // reaches as far as the point itself plus the bench's 16.
+    const from = bot.entity.position;
+    const reach = Math.hypot(from.x - x, from.y - y, from.z - z) + 16;
+    const spots = bot.findBlocks({ matching: [id], maxDistance: reach, count: 8 });
+    return spots.some(
+      (s) => Math.hypot(s.x - x, s.y - y, s.z - z) <= 16
+    );
+  }
+
   chestAt(x, y, z, radius) {
     const bot = this._bot();
     if (!bot) return false;

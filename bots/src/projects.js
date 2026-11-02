@@ -186,6 +186,29 @@ async function growReplant(agent, project) {
     : { done: false, detail: placed.detail };
 }
 
+/** Break seed-bearing grass until the bag holds `wanted` seeds — one
+ *  walk, the whole patch, not one break per project step. Day one the
+ *  seed want cost ~36 s per break (the step's whole decision cadence
+ *  for a single dig), which put 14 seeds at more than an hour of
+ *  serial grinding; a batched run spends the walk once and breaks the
+ *  patch at the digger's own pace. The clock bound keeps the step a
+ *  step; grass beyond `reach` ends the run honestly. */
+async function gatherSeeds(agent, wanted, { seconds = 90, reach = 48 } = {}) {
+  const deadline = Date.now() + seconds * 1000;
+  let broken = 0;
+  while (agent.api.inventory_count('wheat_seeds') < wanted && Date.now() < deadline) {
+    const grass = agent.api.find_block({
+      names: ['short_grass', 'tall_grass', 'grass', 'fern'],
+      max_distance: reach,
+    });
+    if (!grass) break;
+    const dug = await agent.api.dig(grass.x, grass.y, grass.z);
+    if (!dug.ok) break;
+    broken += 1;
+  }
+  return { broken, got: agent.api.inventory_count('wheat_seeds') };
+}
+
 /** farm: hoe, seeds, till, plant — the plan is farmland plus wheat. */
 async function growFarm(agent, project) {
   const missing = missingBlocks(agent, project);
@@ -227,20 +250,27 @@ async function growFarm(agent, project) {
     return { done: false, detail: 'crafted the hoe' };
   }
 
-  if (wheat.length && agent.api.inventory_count('wheat_seeds') < 1) {
-    const grass = agent.api.find_block({
-      names: ['short_grass', 'tall_grass', 'grass', 'fern'],
-      max_distance: 32,
-    });
-    if (grass) {
-      await agent.api.dig(grass.x, grass.y, grass.z);
-      if (agent.api.inventory_count('wheat_seeds') > 0) {
-        return { done: false, detail: 'seeds from the tall grass' };
+  if (wheat.length && agent.api.inventory_count('wheat_seeds') < wheat.length) {
+    // Delivered seeds may be lying at the site (a supply toss skids):
+    // pick them up before grinding for more.
+    await agent.api.pickup_near(project.site.x, project.site.z, 8);
+    if (agent.api.inventory_count('wheat_seeds') < wheat.length) {
+      // short_grass is this version's seed-bearing plant ("grass" is
+      // not in the registry); the terrace by the farm is covered in it.
+      // One batched run per step, not one break: the want is the whole
+      // plot's seeds, and the patch is walked once.
+      const run = await gatherSeeds(agent, wheat.length);
+      if (run.broken === 0 && agent.api.inventory_count('wheat_seeds') < 1) {
+        await standNear(agent, project.site.x, project.site.y, project.site.z);
+        return { done: false, detail: 'no seed grass within reach of the farm' };
       }
-      return { done: false, detail: 'grass broken, no seeds yet' };
+      return {
+        done: false,
+        result: run.broken ? 'win' : undefined,
+        detail: `seed run: ${run.broken} grass broken, ${agent.api.inventory_count('wheat_seeds')} of ${wheat.length} seeds in hand`,
+      };
     }
-    await standNear(agent, project.site.x, project.site.y, project.site.z);
-    return { done: false, detail: 'no tall grass for seeds nearby' };
+    return { done: false, detail: 'seeds in hand for the planting' };
   }
 
   // Till first (the farmland rows), then plant.
@@ -327,6 +357,59 @@ async function buildPlanned(agent, project) {
     return { done: true, detail: 'the last planned block is placed' };
   }
   return { done: false, detail: placed.ok ? `placed ${name}` : placed.detail };
+}
+
+/** ramp: terraform, not construction — each step's column is dug down
+ *  to the step, then finished with the scope's cobblestone, so the old
+ *  wall itself becomes the staircase out of the gully. One cell (or a
+ *  few digs) per step; the dig list is derived from the world, not
+ *  planned blind. */
+async function buildRamp(agent, project) {
+  const missing = missingBlocks(agent, project);
+  if (!missing.length) {
+    return { done: true, detail: 'every step of the ramp stands' };
+  }
+  const have = agent.api.inventory_count('cobblestone');
+  if (have < 1) {
+    const taken = await agent.api.take_from_depot(['cobblestone']);
+    if (taken && taken.ok) return { done: false, detail: `took ${taken.count} cobblestone from the depot` };
+    if (have < 1) {
+      // The world's surface stone is the ramp's own material: a step or
+      // two of quarrying pays for a step of stairs.
+      const stone = agent.api.find_block({ names: ['stone', 'cobblestone'], max_distance: 24 });
+      if (stone) {
+        await agent.api.dig(stone.x, stone.y, stone.z);
+        return { done: false, detail: 'quarried a stone for the steps' };
+      }
+      await standNear(agent, project.site.x, project.site.y, project.site.z);
+      return { done: false, detail: 'waiting at the site for cobblestone' };
+    }
+  }
+  // The lowest missing step first: the staircase is built from the
+  // floor up, and every finished step is the footing for the next.
+  const block = missing.slice().sort((a, b) => a.y - b.y)[0];
+  await standNear(agent, block.x, block.y, block.z);
+  // Carve the column down to the step: everything solid above the
+  // step's own y (and a natural block sitting at the step's y, which
+  // the cobblestone replaces) goes, a few blocks per step.
+  let dug = 0;
+  for (let y = block.y + 6; y >= block.y && dug < 8; y--) {
+    const there = agent.api.block_at(block.x, y, block.z);
+    if (!there || there === 'air' || there === 'cobblestone') continue;
+    const out = await agent.api.dig(block.x, y, block.z);
+    if (!out.ok) return { done: false, detail: `could not carve the step: ${out.detail}` };
+    dug += 1;
+  }
+  const placed = await projectPlace(agent, project, 'cobblestone', block.x, block.y, block.z);
+  if (placed.ok) {
+    return {
+      done: !missingBlocks(agent, project).length,
+      detail: dug
+        ? `carved ${dug} and placed a step (${project.placed || 0} of ${project.scope.blocks.length})`
+        : `placed a step (${project.placed || 0} of ${project.scope.blocks.length})`,
+    };
+  }
+  return { done: false, detail: placed.detail };
 }
 
 /** The tester: walk the finished work, file what is missing. */
@@ -609,16 +692,17 @@ async function supplyStep(agent, board) {
     // in the registry and tall_grass grows two tall only in lush
     // places (the one within 96 of the depot stands 30 blocks DOWN, at
     // y43 — probe, 2026-11-02). The terrace by the farm is covered in
-    // short_grass and fern.
-    const grass = agent.api.find_block({
-      names: ['short_grass', 'tall_grass', 'grass', 'fern'],
-      max_distance: 32,
-    });
-    if (grass) {
-      const dug = await agent.api.dig(grass.x, grass.y, grass.z);
-      return { done: false, result: dug.ok ? 'win' : undefined, detail: dug.detail };
+    // short_grass and fern. One batched run per step fills the whole
+    // want — one break per step was the hour-long grind (2026-11-02).
+    const run = await gatherSeeds(agent, want.count);
+    if (run.broken === 0) {
+      return { done: false, detail: 'no seed grass within reach' };
     }
-    return { done: false, detail: 'no tall grass for seeds nearby' };
+    return {
+      done: false,
+      result: 'win',
+      detail: `seed run: ${run.broken} grass broken, ${run.got} of ${want.count} seeds in hand`,
+    };
   }
   return null;
 }
@@ -632,6 +716,7 @@ const EXECUTORS = {
   farm: growFarm,
   path: buildPlanned,
   shelter: buildPlanned,
+  ramp: buildRamp,
 };
 
 class ProjectService {

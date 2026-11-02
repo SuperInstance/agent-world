@@ -13,6 +13,13 @@
 // always worked that way — two logs in the bill, eight planks and a
 // chest out of them — and the farm and the shelter now follow it.
 //
+// A 3x3 craft also needs a bench to craft it on, and a bench is a log
+// (four planks) the bill must count **when the site has none within
+// crafting reach** — the craft-time check (api.craft) will not find a
+// table that was never brought. The council adds it per proposal; the
+// bench already standing at the depot serves every site near it, so a
+// bill that re-counted it would over-charge the world's wood.
+//
 // The raw cost of a crafted thing is here too, so the council's bills
 // are computed from one table rather than guessed twice.
 
@@ -29,6 +36,7 @@ const CRAFTED_FROM = Object.freeze({
   wooden_hoe: { oak_log: 1 }, // 2 planks + 2 sticks = a share of a log
   chest: { oak_log: 2 }, // 8 planks = 2 logs
   oak_planks: { oak_log: 1 }, // 4 planks = 1 log
+  crafting_table: { oak_log: 1 }, // 4 planks = 1 log
 });
 
 const GATHERABLE_NAMES = Object.freeze(Object.keys(GATHERABLE));
