@@ -413,7 +413,7 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
     return block || null;
   };
 
-  return {
+  const api = {
     // --- what the bot can see ------------------------------------------------
     position: () => {
       const p = bot.entity.position;
@@ -507,6 +507,14 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
             openChest.close();
             openChest = null;
           }
+          // Bare-handed before the window (a use with a held block is
+          // a place, not an open — probe-chest.js timed out holding
+          // its own dirt, 2026-11-02).
+          try {
+            await bot.unequip('hand');
+          } catch (err) {
+            // Nothing was held.
+          }
           const container = await bot.openContainer(chest);
           await new Promise((resolve) => setTimeout(resolve, 400));
           let put = 0;
@@ -592,6 +600,14 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
           if (openChest) {
             openChest.close();
             openChest = null;
+          }
+          // Bare-handed before the window (a use with a held block is
+          // a place, not an open — probe-chest.js timed out holding
+          // its own dirt, 2026-11-02).
+          try {
+            await bot.unequip('hand');
+          } catch (err) {
+            // Nothing was held.
           }
           const container = await bot.openContainer(chest);
           await new Promise((resolve) => setTimeout(resolve, 400));
@@ -724,9 +740,30 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       if (!verdict.ok) {
         return { ok: false, detail: `not mining that: ${verdict.why}` };
       }
+      // Safe-keeping: what cannot regrow from the world never goes
+      // underground. A death below costs the whole inventory —
+      // inventories do not survive a respawn (Sprout's hoe, in the pit,
+      // 2026-11-02) — so the seeds and the hoe are banked at the depot
+      // chest before any deep dig, and the work that needs them takes
+      // them back out. keepInventory stays untouched: it changes the
+      // world for human players too, and that is Casey's call, not the
+      // workface's. The banking fails soft — a chest that will not open
+      // never stops the dig.
+      if (block.position.y < 58) {
+        for (const precious of ['wheat_seeds', 'wooden_hoe']) {
+          if (bot.inventory.items().some((i) => i.name === precious)) {
+            try {
+              await api.leave_at_depot(precious);
+            } catch (err) {
+              // The chest would not open; the dig goes on.
+            }
+          }
+        }
+      }
       try {
         await approach(bot, block.position);
         await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
+        const bagBefore = bot.inventory.items().reduce((s, i) => s + i.count, 0);
         await bot.dig(block);
         // The dig is a packet, not a promise: the server refuses one
         // that is out of reach, and mineflayer does not notice. So the
@@ -748,9 +785,17 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
         // for hours and never carried anything, and the world would
         // look like it was working while it was not.
         const collected = await collectAt(bot, block.position);
+        // The bag is the truth, not the walk: a collection that
+        // chased the wrong entity (or none) still "returns true"
+        // while the drop lies on the slope — the gatherer mined five
+        // logs for an empty bag this way (2026-11-02 20:44Z).
+        const bagAfter = bot.inventory.items().reduce((s, i) => s + i.count, 0);
+        const gained = bagAfter > bagBefore;
         return {
           ok: true,
-          detail: collected ? `mined ${block.name} and collected it` : `mined ${block.name}`,
+          detail: gained
+            ? `mined ${block.name} and collected it`
+            : `mined ${block.name}, but the drop is still out there`,
         };
       } catch (err) {
         return { ok: false, detail: String((err && err.message) || err) };
@@ -765,6 +810,19 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       const verdict = guard.mayPlace(position);
       if (!verdict.ok) {
         return { ok: false, detail: `not building there: ${verdict.why}` };
+      }
+      // Step out of the target cell first. The collector stands IN the
+      // cell it harvested (range 0 picks the drop up; the builder then
+      // fills that same cell with the plan's block) — and the server
+      // silently refuses to place a block where a player stands: the
+      // placement times out with no answer (b069's wall cell, 2026-11-02
+      // 19:16Z, four timeouts on one block). One step aside, then place.
+      const feet = bot.entity.position.floored();
+      if (
+        feet.x === position.x && feet.z === position.z
+        && Math.abs(feet.y - position.y) <= 1
+      ) {
+        await gotoNear(bot, position.x + 1, position.y, position.z, 1, 6000).catch(() => {});
       }
       const target = bot.blockAt(position);
       if (
@@ -865,10 +923,28 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       const tableId = registry.blocksByName['crafting_table']
         ? registry.blocksByName['crafting_table'].id
         : null;
-      const tableBlock = tableId
-        ? bot.findBlock({ matching: tableId, maxDistance: 16 })
-        : null;
-      const recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
+      // The inventory first: what crafts in the 2x2 (planks, sticks —
+      // shapeless) needs no window but the bot's own, and the TABLE
+      // window does not open on this protocol today (21:25-21:47Z,
+      // every table craft timing out on windowOpen while the same
+      // planks and sticks crafted in-inventory at 21:03). The table is
+      // for the 3x3 recipes that cannot happen without it.
+      let recipes = bot.recipesFor(item.id, null, wanted, null);
+      let tableBlock = null;
+      if (!recipes.length) {
+        tableBlock = tableId
+          ? bot.findBlock({ matching: tableId, maxDistance: 16 })
+          : null;
+        if (tableBlock) {
+          try {
+            await gotoNear(bot, tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 3, 10000);
+          } catch (err) {
+            // The walk is best effort; the craft below says its own
+            // truth if the window still will not open.
+          }
+        }
+        recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
+      }
       if (!recipes.length) {
         return {
           ok: false,
@@ -962,6 +1038,7 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       }
     },
   };
+  return api;
 }
 
 /** Walk next to a block, if the bot is not close enough to work on it. */
@@ -986,11 +1063,21 @@ async function approach(bot, position) {
  * enough. Looking for the item entity instead is fragile — the entity
  * names have changed across versions — and the block's position is
  * known exactly.
+ *
+ * The range is 0, not 1: standing BESIDE the dug cell leaves the bot
+ * at the edge of the server's pickup reach (probe-stone-drop.js,
+ * 2026-11-02: a cobble entity lay at distance 1.0 for 3+ s while the
+ * bot stood still; the run before, the same dig auto-picked-up). The
+ * cell is air once the block is broken, so the bot stands inside it
+ * and the drop has no escape. "Stone drops nothing" (day two) was
+ * this: the digs were at reach, the drops landed on the ground, and
+ * range-1 collection missed them — /loot mine and a feet-adjacent dig
+ * both yield cobblestone.
  */
 async function collectAt(bot, position) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      await gotoNear(bot, position.x, position.y, position.z, 1);
+      await gotoNear(bot, position.x, position.y, position.z, 0);
     } catch (err) {
       // The block's own cell cannot be stood beside — a trunk up a
       // face, a log on a ledge — but the DROP is not the block: it
@@ -1006,13 +1093,17 @@ async function collectAt(bot, position) {
   }
   // If the item is still lying about, go to the item itself: the block
   // position is close, but "close" is not "inside the pickup range".
-  return collectEntity(bot);
+  return collectEntity(bot, position);
 }
 
-/** Walk to the dropped item that is nearest, so it is picked up. */
-async function collectEntity(bot) {
+/** Walk to the dropped item nearest THE DIG (not the nearest anywhere:
+ *  a stray seed three blocks over is not this dig's collection, and
+ *  chasing it walks away from the log that just fell), so it is
+ *  picked up. */
+async function collectEntity(bot, near) {
   const drops = Object.values(bot.entities).filter(
     (e) => e && e.position && (e.name === 'item' || e.name === 'Item' || e.name === 'item_stack')
+      && (!near || e.position.distanceTo(new Vec3(near.x, near.y, near.z)) < 8)
   );
   if (!drops.length) return false;
   const drop = drops.sort(
@@ -1024,7 +1115,7 @@ async function collectEntity(bot) {
   } catch (err) {
     return false;
   }
-  await new Promise((resolve) => setTimeout(resolve, 800));
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   return true;
 }
 

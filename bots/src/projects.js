@@ -197,10 +197,30 @@ async function gatherSeeds(agent, wanted, { seconds = 90, reach = 48 } = {}) {
   const deadline = Date.now() + seconds * 1000;
   let broken = 0;
   while (agent.api.inventory_count('wheat_seeds') < wanted && Date.now() < deadline) {
-    const grass = agent.api.find_block({
-      names: ['short_grass', 'tall_grass', 'grass', 'fern'],
+    // any_level: the grass stands a terrace up from the walker. The
+    // level-banded default read "no seed grass within reach" from the
+    // pit floor (Pebble y64, the patch at y71 — twelve blocks away
+    // horizontally, 2026-11-02 19:07Z) while forty stems stood within
+    // 96; it is the wood hunt's gully blindness again, on the seed
+    // path.
+    //
+    // short_grass first, the rest only when none stands: nine runs
+    // broke 45 mixed stems for 0 seeds (20:12Z) while a controlled
+    // 8-stem probe (4 fern, 4 short_grass) paid its one seed from a
+    // short_grass — day one's own finding was "short_grass is the
+    // seed plant", and a fern the run digs for nothing costs a walk.
+    let grass = agent.api.find_block({
+      names: ['short_grass'],
       max_distance: reach,
+      any_level: true,
     });
+    if (!grass) {
+      grass = agent.api.find_block({
+        names: ['short_grass', 'tall_grass', 'grass', 'fern'],
+        max_distance: reach,
+        any_level: true,
+      });
+    }
     if (!grass) break;
     const dug = await agent.api.dig(grass.x, grass.y, grass.z);
     if (!dug.ok) break;
@@ -220,11 +240,21 @@ async function growFarm(agent, project) {
   // The materials: a hoe (2 planks + 2 sticks, so 4 planks and some
   // sticks), and seeds (from the grass). The bill names logs, not a
   // hoe: the gatherer carries logs and the owner crafts (2026-11-02).
+  // A hoe in the hand needs 2 planks AND 2 sticks — holding both and
+  // demanding 4 planks anyway walked back to "waiting for wood" with
+  // a craftable hoe in the bag (2026-11-02 21:05Z, one given log:
+  // 4 planks, 2 to sticks, then 2 left + 2 sticks = a hoe that never
+  // happened).
   if (agent.api.inventory_count('wooden_hoe') < 1 && farmland.length) {
-    if (agent.api.inventory_count('oak_planks') < 4) {
+    const hoeReady = agent.api.inventory_count('oak_planks') >= 2
+      && agent.api.inventory_count('stick') >= 2;
+    if (!hoeReady && agent.api.inventory_count('oak_planks') < 4) {
       const logs = agent.bot.inventory.items().filter((i) => i.name.endsWith('_log'));
       if (logs.length) {
-        await agent.api.craft('oak_planks', 4);
+        const split = await agent.api.craft('oak_planks', 4);
+        if (!split.ok) {
+          return { done: false, detail: `the planks would not split: ${split.detail}` };
+        }
         return { done: false, detail: 'split logs for the hoe' };
       }
       const staged = await agent.api.take_from_depot(['oak_log']);
@@ -232,13 +262,41 @@ async function growFarm(agent, project) {
       // A delivery is a toss, and a tossed item skids: the wood may be
       // lying at the site itself, two blocks from the one it was for.
       const pickedHoe = await agent.api.pickup_near(project.site.x, project.site.z, 6);
-      if (pickedHoe) return { done: false, detail: `picked up ${pickedHoe} delivered item(s) for the hoe` };
+      if (pickedHoe) {
+        WOOD_WAIT.delete(project.id);
+        return { done: false, detail: `picked up ${pickedHoe} delivered item(s) for the hoe` };
+      }
+      // The bill's credit can outlive the wood: a delivery is a toss,
+      // a tossed item skids and despawns in five minutes, and the
+      // staged count still says delivered (b044: 1 log staged
+      // 2026-11-02 11:26, gone by 11:31, the owner "waiting for wood"
+      // for seven hours while the bill believed itself fed). A wait
+      // this long with nothing arriving re-bills one unit — the
+      // gatherer delivers again, and this time the walk arrives (the
+      // ramp stands; the toss lands beside the owner).
+      const waited = WOOD_WAIT.get(project.id) || 0;
+      if (!waited) {
+        WOOD_WAIT.set(project.id, Date.now());
+      } else if (Date.now() - waited > 10 * 60 * 1000) {
+        WOOD_WAIT.set(project.id, Date.now());
+        const stagedNow = project.staged || {};
+        if ((stagedNow.oak_log || 0) > 0) {
+          stagedNow.oak_log -= 1;
+          agent.shared.board.stagedMaterials(project.id, stagedNow);
+          agent.log.note({
+            bot: agent.name,
+            event: 'staged_wood_rebilled',
+            project: project.id,
+            detail: 'ten minutes waiting and no wood arrived; one log re-billed',
+          });
+        }
+      }
       await standNear(agent, project.site.x, project.site.y, project.site.z);
       return { done: false, detail: 'waiting at the site for wood (the hoe)' };
     }
     // A hoe is 2 planks and 2 sticks: the craft fails without the
     // sticks, so they are split out of a plank first.
-    if (agent.api.inventory_count('stick') < 2) {
+    if (!hoeReady && agent.api.inventory_count('stick') < 2) {
       const crafted = await agent.api.craft('stick', 2);
       if (!crafted.ok) return { done: false, detail: `no sticks for the hoe: ${crafted.detail}` };
       return { done: false, detail: 'split planks for the sticks' };
@@ -329,6 +387,69 @@ async function growFarm(agent, project) {
   return { done: false, detail: placed.ok ? 'planted seeds' : placed.detail };
 }
 
+/** The live wheat on a farm's own cells, ripe first. The scope's wheat
+ *  cells are the plot's address: whatever stands on them now is the
+ *  crop. Age 7 is ripe (the blockstate's own number); an unreadable age
+ *  counts as ripe so an old client never starves a finished plot. */
+function ripeWheatOn(agent, project) {
+  const cells = (project.scope && project.scope.blocks || [])
+    .filter((b) => b.name === 'wheat');
+  const out = [];
+  for (const cell of cells) {
+    const block = agent.bot.blockAt(
+      new (require('vec3').Vec3)(cell.x, cell.y, cell.z)
+    );
+    if (!block || block.name !== 'wheat') continue;
+    let props = null;
+    try { props = block.getProperties(); } catch (err) { props = null; }
+    const age = props && props.age !== undefined ? Number(props.age) : null;
+    if (age === null || age >= 7) out.push({ x: cell.x, y: cell.y, z: cell.z });
+  }
+  return out;
+}
+
+/** The wheat cycle: harvest the ripe, replant the same cell, bank the
+ *  surplus. A farm planted once and left is a farm that ripens once —
+ *  the cycle is what sustains it (day three's CONTINUE: "plant-harvest-
+ *  replant so the farm sustains itself"). One stem a step: the dig
+ *  collects its own drops (api.dig walks into the cell now), the seed
+ *  goes straight back into the ground it came from, and the plot never
+ *  has to be re-planned. The seed guard: no harvest when the hand holds
+ *  no seed and only one stem is ripe — a single 0-seed drop would end
+ *  the farm; two stems or one seed in hand keeps the cycle alive. */
+async function tendWheat(agent, project) {
+  const ripe = ripeWheatOn(agent, project);
+  const seeds = agent.api.inventory_count('wheat_seeds');
+  if (!ripe.length) return { done: false, detail: 'the wheat is still green' };
+  if (seeds < 1 && ripe.length < 2) {
+    return { done: false, detail: 'holding the last stem until seeds are in hand' };
+  }
+  const stem = ripe[0];
+  const dug = await agent.api.dig(stem.x, stem.y, stem.z);
+  if (!dug.ok) return { done: false, detail: `harvest: ${dug.detail}` };
+  const wheatNow = agent.api.inventory_count('wheat');
+  const seedsNow = agent.api.inventory_count('wheat_seeds');
+  // Replant before anything else: the vacated cell is farmland under a
+  // clear sky, and a seed in hand is a seed in the ground.
+  if (seedsNow >= 1) {
+    const planted = await agent.api.place('wheat_seeds', stem.x, stem.y, stem.z);
+    if (!planted.ok) {
+      return { done: false, detail: `harvested but could not replant: ${planted.detail}` };
+    }
+  }
+  // The surplus is the farm's product: wheat to the depot for people,
+  // and a seed bank beyond a sower's pocket.
+  const detail = [`harvested wheat (now ${wheatNow} wheat, ${seedsNow} seeds)`];
+  if (seedsNow > 12) {
+    await agent.api.leave_at_depot();
+    detail.push('banked the surplus seeds');
+  } else if (wheatNow >= 6) {
+    await agent.api.leave_at_depot();
+    detail.push('took the wheat to the depot');
+  }
+  return { done: false, result: 'win', detail: detail.join('; ') };
+}
+
 /** path / shelter: place the planned blocks; wait at the site for materials. */
 async function buildPlanned(agent, project) {
   const missing = missingBlocks(agent, project);
@@ -360,6 +481,41 @@ async function buildPlanned(agent, project) {
 
   const block = missing.find((b) => b.name === name);
   await standNear(agent, block.x, block.y, block.z);
+  // A placement the server will not answer is not a placement: it
+  // refuses one that is out of reach SILENTLY, and mineflayer times
+  // out with no reason (b069's grove cell, 2026-11-02 — four timeouts
+  // on one block while the builder stood in the pit). The honest
+  // outcome is "cannot reach": the stall clock judges a project that
+  // cannot get to its own work, and the council re-proposes on ground
+  // the plan can stand on.
+  const from = agent.position();
+  const reach = from
+    ? Math.hypot(from.x - block.x, from.y - block.y, from.z - block.z)
+    : Infinity;
+  if (reach > 4.4) {
+    return {
+      done: false,
+      detail: `cannot reach ${block.x},${block.y},${block.z} for the ${name}` +
+        (from ? ` (standing at ${from.x},${from.y},${from.z}, ${reach.toFixed(1)} away)` : ''),
+    };
+  }
+  // The plan meets the world: a trunk or a boulder may stand in a
+  // planned cell (the shelter's first wall cell held a spruce_log —
+  // surfaceAt reads the ground, not the trunk growing on it,
+  // b069/2026-11-02 19:06Z: "there is already a spruce_log there",
+  // a spin a stall clock would have paid for with the whole project).
+  // The builder clears what the guard allows, and the clearing pays:
+  // the trunk becomes the planks the roof asked for.
+  const occupant = agent.api.block_at(block.x, block.y, block.z);
+  if (
+    occupant && occupant !== 'air' && occupant !== 'cave_air'
+    && occupant !== 'void_air' && occupant !== name
+  ) {
+    const cleared = await agent.api.dig(block.x, block.y, block.z);
+    if (!cleared.ok) {
+      return { done: false, detail: `the cell holds ${occupant}: ${cleared.detail}` };
+    }
+  }
   const placed = await projectPlace(agent, project, name, block.x, block.y, block.z);
   if (placed.ok && !missingBlocks(agent, project).length) {
     agent.say(`${project.title} is up`);
@@ -502,6 +658,13 @@ function supplyTarget(board) {
  *  unwalkable ten minutes ago may be tried again; one refused a moment
  *  ago is not re-bought at the price of a walk. */
 const HUNT_MEMORY = new Map();
+
+/** The first "waiting for wood" of a project, this process's lifetime.
+ *  The board folds a FRESH project object for every tick, so a wait
+ *  timestamp stored on the project itself never aged past one tick
+ *  (the re-bill never fired, 2026-11-02 20:13Z). The map is keyed by
+ *  project id and cleared when the wood actually arrives. */
+const WOOD_WAIT = new Map();
 
 async function supplyStep(agent, board) {
   const target = supplyTarget(board);
@@ -678,9 +841,18 @@ async function supplyStep(agent, board) {
       // standing at the gatherer's own level.
       walks += 1;
       const dug = await agent.api.dig(log.x, log.y, log.z);
-      if (dug.ok) {
+      if (dug.ok && dug.detail.includes('collected it')) {
         HUNT_MEMORY.delete(key);
         return { done: false, result: 'win', detail: dug.detail };
+      }
+      if (dug.ok) {
+        // A dig that paid nothing is a refusal about THIS tree: the
+        // drop fell where the collector could not stand (a trunk on a
+        // slope), and mining it again pays nothing again (five logs
+        // mined for an empty bag, 2026-11-02 20:32-20:44Z). The tree
+        // cools ten minutes and the next candidate is tried.
+        refused(key, `(${log.x},${log.y},${log.z}) dig paid nothing`);
+        continue;
       }
       if (!dug.detail.includes('not mining') && !dug.detail.includes('too deep')) {
         return { done: false, detail: dug.detail };
@@ -740,7 +912,15 @@ async function supplyStep(agent, board) {
     // broken" every tick, and nothing left within 96 either).
     const run = await gatherSeeds(agent, want.count, { reach: 160, seconds: 150 });
     if (run.broken === 0) {
-      return { done: false, detail: 'no seed grass within reach' };
+      // An empty forage backs off: the play is the gatherer's whole
+      // tick, and a find that returns in fifty milliseconds re-issues
+      // every two seconds for as long as the bill stands (the seed
+      // spin, 2026-11-02 — thirty instant plays a minute, each
+      // "no seed grass within reach"). The wait is the walk the run
+      // did not take; grass regrows and the farmer may deliver seeds
+      // of its own in the meantime.
+      await new Promise((resolve) => setTimeout(resolve, 45000));
+      return { done: false, detail: 'no seed grass within reach — backing off a minute' };
     }
     return {
       done: false,
@@ -840,6 +1020,33 @@ class ProjectService {
           predict: { kind: 'none' },
           body: () => supplyStep(agent, this.board) || { done: false, detail: 'nothing to supply' },
         };
+      }
+    }
+
+    // The farmer's standing work: when no project owns it, the wheat
+    // cycle does — a planted farm is harvested and replanted forever,
+    // which is the difference between a farm and a decoration.
+    if (agent.role === 'farmer') {
+      const farm = this.board.list().find(
+        (p) => p.kind === 'farm' && (p.status === 'active' || p.status === 'done')
+      );
+      if (farm && farm.scope && agent.bot && agent.bot.blockAt) {
+        let ripe = [];
+        try { ripe = ripeWheatOn(agent, farm); } catch (err) { ripe = []; }
+        if (ripe.length) {
+          return {
+            skill_id: 'project.tendfarm',
+            title: 'tend the wheat',
+            reason: 'farm:' + farm.id,
+            predict: { kind: 'none' },
+            body: async () => {
+              const result = await tendWheat(agent, farm);
+              // Tending never finishes a project: the cycle is the work.
+              if (result && result.done) return { done: false, detail: result.detail };
+              return result;
+            },
+          };
+        }
       }
     }
     return null;

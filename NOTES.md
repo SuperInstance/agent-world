@@ -739,3 +739,134 @@ re-run.
   skill in the world costs 36-85 s of real walking, which is why the
   matrix is three seeds and not thirty.
 - The lab note with the whole story: `docs/lab/exp-agent-world-gym.md`.
+
+## Day three (2026-11-02, the 09:26 seat)
+
+- 09:26 — the seat opens on the day-3 CONTINUE (stone drops, safe-keeping,
+  the wheat cycle, the council's next projects). The seven detached
+  processes all alive; TPS 20.0; 45 GB available, load 14.
+- 09:29:46 — **the seat's own fault first**: I sent a Tab to the server
+  console trying to tab-complete `gamerule `, and the completion's
+  SuggestCommand component contained a literal tab — a disallowed chat
+  character — and the serializer exception crashed the tick loop
+  (crash-2026-11-02_09.29.46-server.txt; "Failed to encode Minecraft
+  Component: ... Disallowed chat character: '\t'"). The server saved all
+  chunks on the way down; restarted at 09:31:24 (Done 14.5s, joins work).
+  Rule for every seat after this one: **the tmux console is a terminal —
+  never send Tab; type plain queries only** (plain `gamerule
+  minecraft:block_drops` is safe and answered in the log).
+- 09:31 — after the restart Kite and Sprout rejoined but Pebble and Timber
+  did not: Paper throttled their same-IP reconnects at 18:31:25Z
+  ("Connection throttled!"), and the kick-during-login hung their
+  reconnect loops forever — `connect()` only settled on 'spawn'/'error',
+  so a login that ends with 'kicked'+'end' never settles the promise the
+  loop is awaiting. Fixed in bots/src/agent.js (first of spawn/error/end
+  settles it); ops/bots.sh restart brought all four back staggered
+  (18:37:22–18:37:41Z). Also noted, not yet acted on: floodgate fails to
+  enable on every boot (guice error, then "Disabling floodgate") and its
+  dead netty injector throws "zip file closed" into the log on every
+  join — Java joins are unaffected; the signed-in Bedrock door is
+  untested today.
+- 09:34:57 — the stone question, first instrument: NOT config.
+  `minecraft:block_drops` (the rule's 26.1 name; doTileDrops is gone and
+  level.dat no longer holds GameRules — they live per-dimension in
+  world/dimensions/minecraft/overworld/data/minecraft/game_rules.dat) is
+  **true**; plugins are Geyser/ViaVersion/floodgate (none touch drops);
+  Pebble's playerGameType is 0. And `loot give Kite mine 0 20 0 air`
+  **dropped 1 cobblestone** from minecraft:blocks/stone (Kite even made
+  the Stone Age advancement) — the loot table itself yields without a
+  tool. So the dig path, not the table, loses the drop. Next: inspect
+  the pickaxe's components in a live inventory.
+- 18:41–18:52 — **stone drops after all** (the day-3 question, closed):
+  probe-stone-drop.js, three runs. A feet-adjacent pickaxe dig
+  auto-picked 1 cobblestone (0→1); bare hand gave nothing (vanilla);
+  the repeat run left a cobble entity lying at distance 1.0 for 3+ s
+  while the bot stood still — the server's pickup radius is tighter
+  than range-1 collection — and the console confirmed the entity
+  server-side (execute → "COBBLE_ENTITY_THERE", 09:48:22 local).
+  Day two's "stone drops nothing" was instrumentation blindness:
+  digs at reach distance, drops on the ground, nobody walking onto
+  them. collectAt now stands IN the dug cell (dcd3191); the doc
+  carries the Superseded block (§6 and the new §7).
+- 18:52 — the world still had what day two thought spent:
+  probe-woodseed.js reads 40 logs and 40 short_grass within 96 of the
+  depot (8s chunk warm-up first). Day two's forage read before the
+  chunks loaded. No operator debt for the farm bootstrap.
+- 18:56:38 — the crew restarted onto all of day three's code
+  (0b16505): the wheat cycle (tendWheat — ripe-only harvest, replant
+  the same cell, bank the surplus, seed guard on the last stem),
+  safe-keeping (a dig below y=58 banks seeds and the hoe at the chest
+  first; keepInventory untouched — proposed to Casey in the doc
+  instead), and the council's shelter gate on the world's own trunk
+  count. First tick: needs [ramp, farm, shelter]; **b069 "a shelter
+  by the depot" proposed → allow → ratified** (site 6,67,11; 23
+  blocks). All four bots back, staggered 18:56:19–18:56:37Z. Ramp
+  tests 9/9, drift suite 71 passed. The unattended stretch (the
+  headline measurement) starts here.
+- 19:06–19:36 — the first unattended half-hour bought three more
+  catches, each fixed and committed: **(1)** the seed forage was
+  level-blind (find_block's default band is feet±2; Pebble in the pit
+  at y64 read "no seed grass within reach" while forty stems stood at
+  y71 — the wood hunt's own gully blindness, on the seed path;
+  gatherSeeds passes any_level now), and an empty run backed off 45 s
+  instead of re-issuing every tick (the seed spin, 30 instant plays a
+  minute, 04f4da9). The first honest seed run: 5 grass broken over
+  170 s, 0 of 14 seeds — the drop rate is about one seed in eight
+  stems; the wheat cycle is what makes seeds compound, the grind is
+  real. **(2)** my own range-0 collection stood the builder IN the
+  cell it was about to fill, and the server silently refuses to place
+  a block where a player stands — "Server did not answer the
+  placement", four timeouts on one wall cell; api.place steps one
+  cell aside now (b0bd934). **(3)** the deepest: b069's site was
+  inside a dense spruce grove — surfaceAt skips leaves and logs, so
+  the spot read standable while trunks stood in the wall cells and
+  the canopy filled the roof band (probe-site.js). The walk into the
+  canopy pocket hung the planner itself (probe-walk-shelter.js:
+  GoalNear unresolved after 170 s). The shelter planner now requires
+  three clear cells above the ground across the footprint and tries
+  eight candidate rings; buildPlanned names "cannot reach" instead of
+  firing a doomed placement; b069 rides its stall clock to abandon
+  (~20:27Z) and the next proposal recomputes on clear ground
+  (0287291). TPS 20.0 throughout; grief 0.
+- 20:29–22:10 — the evening chain, fixed link by link, to the
+  boundary: **(a)** the staged-wood credit outlived the despawned
+  delivery (b044's log staged 11:26Z day two, gone by 11:31; a
+  ten-minute wait re-bills one unit now — c6a21aa, fired 20:29:54Z);
+  **(b)** the wait timer stored on a board-folded project object
+  never aged past one tick (module map now — 363a7ba); **(c)** a dig
+  that paid nothing reported itself a win — the bag is the truth now
+  (e71e9de; Pebble mined five spruce logs for an empty bag
+  20:32–20:44Z, drops falling where the collector cannot stand); **(d)**
+  the first tick after spawn ran the reflex before the crew was wired
+  and dumped the project's bag at the depot pile (idle until shared
+  exists — c817647; this is where every given material kept going);
+  **(e)** a hoe in hand needs 2 planks AND 2 sticks, not 4 planks
+  first (b06df52); **(f)** api.craft opened a bench window from
+  twelve blocks away — walk first (65b8079), inventory recipe first
+  (aaca66e). And the boundary: **the use-on-block packet does not
+  work for mineflayer clients here** — chest opens, table opens, and
+  the hoe's till all time out or land nothing (probe-chest.js ×2,
+  bare-handed; the till 2.4 s per attempt from ON the plot after an
+  operator tp 22:03Z). No farmland has ever existed in this world;
+  the depot chest has never held one item. Dig works, place works,
+  use does not. A clean save-all restart (12:50 local) did not change
+  it. Next-seat work: the use packet on 26.1 (client or server side).
+- Operator debts, the day's full list: 1 seed 20:49Z (swept from the
+  pile by the scout), 1 log + 1 seed 21:02Z (dumped by the startup
+  reflex), 1 log + 1 seed 21:31Z (the planks never split), 1 hoe + 2
+  seeds 21:54Z (the till never lands), 1 tp Sprout to the plot
+  22:03Z. The farm was never hand-built; the number stays the
+  community's.
+- 22:10 — the seat's close-out numbers: TPS 751/752 samples >= 19.5
+  (one 18.7 at the clean restart), grief 0 (six player builds
+  protected), MemAvailable min 34.4 GB, board done 2 / active 2
+  (farm blocked on the use packet; shelter riding its stall clock,
+  the fixed planner re-proposes on clear ground after the abandon).
+  Projects done per hour today: 0 — the day bought nine fixes with
+  their numbers, and named the two blockers. The seven processes run
+  on: paper, reflex, bots, viewer, d1, drift-watch, community-watch.
+- 22:15 — d1 had exited at some point in the evening (its tmux window
+  gone; the reflex ran on its local bandit all night — the crew kept
+  deciding, which is the design's own fallback proving itself);
+  restarted via ops/d1.sh, port 8094, health ok. The seven run again:
+  paper, reflex, bots, viewer, d1, drift-watch, community-watch.
