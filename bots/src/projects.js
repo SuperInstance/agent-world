@@ -203,11 +203,24 @@ async function gatherSeeds(agent, wanted, { seconds = 90, reach = 48 } = {}) {
     // horizontally, 2026-11-02 19:07Z) while forty stems stood within
     // 96; it is the wood hunt's gully blindness again, on the seed
     // path.
-    const grass = agent.api.find_block({
-      names: ['short_grass', 'tall_grass', 'grass', 'fern'],
+    //
+    // short_grass first, the rest only when none stands: nine runs
+    // broke 45 mixed stems for 0 seeds (20:12Z) while a controlled
+    // 8-stem probe (4 fern, 4 short_grass) paid its one seed from a
+    // short_grass — day one's own finding was "short_grass is the
+    // seed plant", and a fern the run digs for nothing costs a walk.
+    let grass = agent.api.find_block({
+      names: ['short_grass'],
       max_distance: reach,
       any_level: true,
     });
+    if (!grass) {
+      grass = agent.api.find_block({
+        names: ['short_grass', 'tall_grass', 'grass', 'fern'],
+        max_distance: reach,
+        any_level: true,
+      });
+    }
     if (!grass) break;
     const dug = await agent.api.dig(grass.x, grass.y, grass.z);
     if (!dug.ok) break;
@@ -239,7 +252,10 @@ async function growFarm(agent, project) {
       // A delivery is a toss, and a tossed item skids: the wood may be
       // lying at the site itself, two blocks from the one it was for.
       const pickedHoe = await agent.api.pickup_near(project.site.x, project.site.z, 6);
-      if (pickedHoe) return { done: false, detail: `picked up ${pickedHoe} delivered item(s) for the hoe` };
+      if (pickedHoe) {
+        WOOD_WAIT.delete(project.id);
+        return { done: false, detail: `picked up ${pickedHoe} delivered item(s) for the hoe` };
+      }
       // The bill's credit can outlive the wood: a delivery is a toss,
       // a tossed item skids and despawns in five minutes, and the
       // staged count still says delivered (b044: 1 log staged
@@ -248,11 +264,11 @@ async function growFarm(agent, project) {
       // this long with nothing arriving re-bills one unit — the
       // gatherer delivers again, and this time the walk arrives (the
       // ramp stands; the toss lands beside the owner).
-      const waited = project._woodWaitSince || 0;
+      const waited = WOOD_WAIT.get(project.id) || 0;
       if (!waited) {
-        project._woodWaitSince = Date.now();
+        WOOD_WAIT.set(project.id, Date.now());
       } else if (Date.now() - waited > 10 * 60 * 1000) {
-        project._woodWaitSince = Date.now();
+        WOOD_WAIT.set(project.id, Date.now());
         const stagedNow = project.staged || {};
         if ((stagedNow.oak_log || 0) > 0) {
           stagedNow.oak_log -= 1;
@@ -632,6 +648,13 @@ function supplyTarget(board) {
  *  unwalkable ten minutes ago may be tried again; one refused a moment
  *  ago is not re-bought at the price of a walk. */
 const HUNT_MEMORY = new Map();
+
+/** The first "waiting for wood" of a project, this process's lifetime.
+ *  The board folds a FRESH project object for every tick, so a wait
+ *  timestamp stored on the project itself never aged past one tick
+ *  (the re-bill never fired, 2026-11-02 20:13Z). The map is keyed by
+ *  project id and cleared when the wood actually arrives. */
+const WOOD_WAIT = new Map();
 
 async function supplyStep(agent, board) {
   const target = supplyTarget(board);
