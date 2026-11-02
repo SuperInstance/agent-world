@@ -923,35 +923,28 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       const tableId = registry.blocksByName['crafting_table']
         ? registry.blocksByName['crafting_table'].id
         : null;
-      const tableBlock = tableId
-        ? bot.findBlock({ matching: tableId, maxDistance: 16 })
-        : null;
-      // The bench within sixteen is not the bench within REACH: a
-      // recipe found at a table twelve blocks away still has to be
-      // crafted AT it, and a window the server refuses to open for a
-      // bot that stands far off times out after twenty seconds — the
-      // farmer "split logs" every 22 s while every craft failed
-      // silently (the caller did not check, 2026-11-02 21:25Z). Walk
-      // to the bench first; the window opens, the craft lands.
-      if (tableBlock) {
-        try {
-          await gotoNear(bot, tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 3, 10000);
-        } catch (err) {
-          // The walk is best effort; the craft below says its own
-          // truth if the window still will not open.
+      // The inventory first: what crafts in the 2x2 (planks, sticks —
+      // shapeless) needs no window but the bot's own, and the TABLE
+      // window does not open on this protocol today (21:25-21:47Z,
+      // every table craft timing out on windowOpen while the same
+      // planks and sticks crafted in-inventory at 21:03). The table is
+      // for the 3x3 recipes that cannot happen without it.
+      let recipes = bot.recipesFor(item.id, null, wanted, null);
+      let tableBlock = null;
+      if (!recipes.length) {
+        tableBlock = tableId
+          ? bot.findBlock({ matching: tableId, maxDistance: 16 })
+          : null;
+        if (tableBlock) {
+          try {
+            await gotoNear(bot, tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 3, 10000);
+          } catch (err) {
+            // The walk is best effort; the craft below says its own
+            // truth if the window still will not open.
+          }
         }
+        recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
       }
-      // And an empty hand opens what a full hand cannot: a use packet
-      // with a held block is a PLACE, not a USE, on this protocol —
-      // the farmer holding the very log it came to split, and the
-      // chest probe holding its dirt, both timed out on windowOpen
-      // (21:37Z, and probe-chest.js). Windows open bare-handed.
-      try {
-        await bot.unequip('hand');
-      } catch (err) {
-        // Nothing was held, or the swap is already done.
-      }
-      const recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
       if (!recipes.length) {
         return {
           ok: false,
