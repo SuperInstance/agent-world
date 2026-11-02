@@ -53,7 +53,13 @@ sample() {
         tmux send-keys -t "$CONSOLE" -l "tps" </dev/null 2>/dev/null || true
         tmux send-keys -t "$CONSOLE" Enter </dev/null 2>/dev/null || true
         sleep 3
+        # The console prints the TPS with ANSI colour codes around the
+        # numbers, so the colour is stripped before the number is read.
+        # Without that, the column was empty for every sample of the
+        # first hour (the number is there: "TPS from last 1m, 5m, 15m:
+        # <esc>[38;5;10m20.0<esc>[0m").
         TPS=$(tail -c "+$((MARK + 1))" "$PAPER_LOG" 2>/dev/null \
+            | sed -e 's/\x1b\[[0-9;]*m//g' \
             | grep -aoE 'TPS from last 1m, 5m, 15m: [0-9]+(\.[0-9]+)?' | tail -1 \
             | sed 's/.*: //' || true)
     fi
