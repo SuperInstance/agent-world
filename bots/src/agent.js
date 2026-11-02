@@ -903,6 +903,16 @@ class Agent {
       }
     }
 
+    // The crew is still assembling — this builder just spawned and the
+    // shared board is not wired yet. A reflex tick NOW runs a library
+    // skill that knows nothing of any project: the farmer's "break up
+    // the ground and leave the bag at the depot" dumped a craftable
+    // hoe's planks and sticks (and a given seed) onto the pile one
+    // second after spawn, on every restart (21:10:42Z spawn,
+    // 21:10:43Z decision, 21:11:21Z "left the bag at the depot"). Idle
+    // this tick instead; the community arrives within seconds.
+    if (!this.shared || !this.shared.projects) return;
+
     const ctx = this.context();
     let decision;
     try {
