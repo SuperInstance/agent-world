@@ -786,6 +786,19 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       if (!verdict.ok) {
         return { ok: false, detail: `not building there: ${verdict.why}` };
       }
+      // Step out of the target cell first. The collector stands IN the
+      // cell it harvested (range 0 picks the drop up; the builder then
+      // fills that same cell with the plan's block) — and the server
+      // silently refuses to place a block where a player stands: the
+      // placement times out with no answer (b069's wall cell, 2026-11-02
+      // 19:16Z, four timeouts on one block). One step aside, then place.
+      const feet = bot.entity.position.floored();
+      if (
+        feet.x === position.x && feet.z === position.z
+        && Math.abs(feet.y - position.y) <= 1
+      ) {
+        await gotoNear(bot, position.x + 1, position.y, position.z, 1, 6000).catch(() => {});
+      }
       const target = bot.blockAt(position);
       if (
         target &&
