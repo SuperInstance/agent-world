@@ -509,3 +509,22 @@ re-run.
   What the world still owes itself: a wheat cycle (plant-harvest-
   replant) so seeds compound instead of being mined out of the grass
   — that is next-seat work, recorded under risks.
+
+- 16:10–17:40 — the pickaxe existed by 16:41 (bench-first: mineflayer's
+  2x2 inventory craft times out on windowOpen, the table's window is
+  the path that works — five attempts say so), the quarry still gave
+  nothing, and the instrument closed it: **equip ok, cobble in hand 0**
+  — pickaxe in hand, dig resolved, block to air, no drop entity, no
+  item (probe-quarry.js reproduced it in isolation). This world's
+  stone drops nothing, pickaxe or no; grass drops seeds, dirt drops
+  dirt. Unverified why; an open question recorded for the next seat.
+  The ramp is **dirt** now (96a6710): the scope names dirt steps, the
+  bill is empty — the carve itself is dirt, and the steps pay for
+  themselves out of the ground they are cut into. Operator debts of
+  the day, honestly owed: one console tp (Timber, y40 → the ramp site,
+  16:04 — the bandit's library skills mine the builder underground
+  between steps, and from below the y=48 floor no dig up is legal) and
+  two oak logs given for the pickaxe (16:40). b060 (cobblestone scope)
+  carves real terrain until its stall clock abandons it (~19:00Z);
+  the next proposal recomputes on the carved ground and builds the
+  dirt steps on it.

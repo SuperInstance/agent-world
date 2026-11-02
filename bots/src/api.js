@@ -126,7 +126,6 @@ const FACES = [
  */
 function givePathfinding(bot, guard) {
   const applyGuard = () => {
-    if (!guard) return;
     try {
       const movements = bot.pathfinder ? bot.pathfinder.movements : null;
       if (!movements) return;
@@ -134,6 +133,23 @@ function givePathfinding(bot, guard) {
       movements.safeToBreak = (block) => {
         if (!plain(block)) return false;
         if (!block || !block.position) return true;
+        // The road never digs below the community's floor — the
+        // workface's own rule (no dig under y=48) held at the skills
+        // while the planner tunnelled the crew to bedrock beneath it
+        // (the playable round's Pebble, and 2026-11-02's Timber at
+        // y38, Sprout at y21, Timber again at y32 — a bot below the
+        // floor has no legal dig up and no walk budget to climb, an
+        // operator tp for each). A bot ALREADY below the floor keeps
+        // its whole dig freedom: the ban is what would trap it there
+        // forever, and digging up is the only way home.
+        if (
+          block.position.y < 48 &&
+          bot.entity &&
+          bot.entity.position.y >= 48
+        ) {
+          return false;
+        }
+        if (!guard) return true;
         return guard.mayDig(block.position).ok;
       };
     } catch (err) {
