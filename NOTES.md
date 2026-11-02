@@ -518,3 +518,118 @@ re-run.
   not comparable per episode; that is said in the lab note.
 - The lab note: `docs/lab/exp-agent-world-gym.md`. The package's own
   README (how to run, what it needs, how long it takes): `gym/README.md`.
+
+## 2026-11-02, the gym round (desk brief: "agent-world-gym on the Thor")
+
+- 06:54–07:03 — Read the desk brief and the Thor's own BRIEF.md, the
+  autoplay-stack doc, and the crafter round-2 lab note (the rule that
+  carries over: **record ALL of a teacher's frames**; a subset is a
+  compute-saving shortcut, not a better choice — round 2's verdict was
+  that the teaching-moment filter keeps 98.8 % of the decisive frames
+  and teaches nothing beyond its own selection). Read the world's
+  contract: the reflex's context (`bots/src/agent.js` `context()`), the
+  option set (`agent_world_reflex.library` `eligible()`), the sealed
+  prediction (`models.py`), the door (`door.py`), the ledger
+  (`ledger.py`, builder-ide's `core.night.ledger` under the hood) and
+  the bots' api + sandbox (`bots/src/api.js`).
+  The gym branch was clean at b3cced0 (the community round's merge); no
+  gym work had been started. Nothing of the community's was disturbed:
+  the live world (25565), the bots, the reflex and d1 were left running
+  exactly as they were.
+- 07:03–07:14 — The environment, built under `gym/`:
+  `agent_world_gym.AgentWorldEnv(reset/step)` over a bridge to one
+  mineflayer bot. The observation is the reflex's own context, encoded
+  once (`facts.py`) so the live env and the community's replay read the
+  world the same way; the action is the library's live option set,
+  discrete, with the ineligible options masked into
+  `info["eligible_actions"]`. The bridge (`gym/bot/gym-bot.js`) reuses
+  the world's own `Agent`, api, sandbox and measure, with a **null
+  reflex** — it asks nothing and records nothing, so the gym writes
+  nothing to the live world (checked afterwards: 0 plays by "Pupil" in
+  the community's ledger).
+- 07:05 — The private world, per the brief: the server copied from the
+  community's `runtime/paper` with **every `world*` directory left
+  behind**, its own seed (`agent-world-gym`), on **127.0.0.1:25630**
+  (not 25565, not voyager-port's 25600, not world-snapshot's 25610),
+  offline mode, under `thor-admit run --tier live --peak 3G --label
+  agent-world-gym.mc` — lease #56, 1.4 GB resident against a 54 GB free
+  box (load ~10.4, another seat's 40 GB lease alongside). It generated
+  in **11.1 s** ("Done (11.122s)!"). The live world's world directory
+  was never copied and never touched.
+- 07:06–07:20 — The tests, five files, all passing: the facts encoder
+  (one encoder, shared; a missing confidence is -1 and not 0; an
+  unnamed block is "unknown" and never "air"), the env (a win is 1.0, a
+  partial carries **no** reward and says so, an option that does not
+  apply is refused by name, the eligible set is the world's own rule),
+  the ledger (the fold, the episode split, and a write through the
+  read-only connection **refused** by SQLite), the recorder (every
+  frame kept, the community's own actions recorded, a partial stays a
+  partial), the student (it learns what it is shown; the held-out split
+  is by episode; the random policy stays legal).
+- 07:20–07:36 — Two bugs of my own, both found by the live run:
+  - **the episode split was wrong.** Splitting on the log's order made
+    every handover between two of the four builders a new episode:
+    **43,466 episodes of one or two plays** from 71,577. The rule is now
+    per bot and then on the silence (600 s), and the same ledger folds
+    into **20 episodes**. Regression test added.
+  - **the episode boundary hung.** The bridge emptied the agent's bag
+    with `bot.toss(type, null, count, callback)`; mineflayer's `toss`
+    takes three arguments and returns a promise, and never calls a
+    callback, so the reset waited for ever once the agent had a log in
+    its bag. The bag is emptied with the promise API now, and every
+    step of the boundary (toss, walk home, respawn) is capped.
+  - Also fixed: the block grid read "unknown" everywhere, because
+    `bot.blockAt` takes a position and the bridge passed three bare
+    numbers (the world's own api reads it with `new Vec3(x, y, z)`).
+- 07:36–07:52 — The run. The private world's dataset: 3 episodes, 18
+  frames, under the cycle scripted policy. The community's dataset:
+  **20 episodes, 72,388 frames**, read out of the world's ledger through
+  a read-only SQLite connection. Every frame kept — nothing filtered.
+  The action space is 41 options (the library's 13 live ones plus every
+  option the community has ever chosen, retired versions and project
+  steps included), so a student cloned from the community can be played
+  in the private world with no translation table.
+- 07:52 — The students. `bc-community`: 48,163 training frames,
+  24,225 held out (whole episodes), held-out agreement **0.951**,
+  training agreement 0.733. `bc-private`: 12 training frames — three
+  episodes of a scripted policy is almost nothing, and the report says
+  so. The rollouts (3 arms × 3 seeds × 2 episodes × 6 steps) are the
+  long part: a skill in the world costs 36–85 s of real walking.
+  The community's own rate, in the same units: **140.5 gathers and 0.6
+  projects per episode** — but a community episode is a bot's whole run
+  (3,598 plays on average) and a gym episode is 6 steps, so the two are
+  not comparable per episode; that is said in the lab note.
+- The lab note: `docs/lab/exp-agent-world-gym.md`. The package's own
+  README (how to run, what it needs, how long it takes): `gym/README.md`.
+
+- 18:28 -- **The run's numbers** (1 h 52 m wall: 16:36:09Z -> 18:28:35Z).
+  The datasets: the community's **20 episodes / 72,388 frames** (every
+  frame kept), the private world's 3 episodes / 18 frames. The action
+  space: 41 options (13 live in the library + every option the community
+  has ever chosen, so a student cloned from the community plays in the
+  private world with no translation).
+  The students: `bc-community` 48,163 training frames / 24,225 held out
+  (whole episodes), held-out agreement **0.951**; `bc-private` 12 training
+  frames -- three episodes of a scripted policy is almost nothing, and the
+  report says so.
+  The rollouts (gathers per 6-step episode, the world's own units):
+  **bc-community 6.00** (seeds 6, 6, 6), **random 4.00** (seeds 3, 5,
+  4), **bc-private 2.00** (seeds 0, 0, 6). Projects 0.00 for every arm:
+  the gatherer never builds, so the other half of the
+  achievements-equivalent needs the builder's role rolled out.
+  The mechanism is in the world's own log: the community's gatherer spent
+  the morning evolving its wood skill (g15 -- search 96 blocks at any
+  level, walk on when it misses), and the student cloned from 72,388
+  frames plays that skill every time; the random policy picks it about a
+  third of the time and the surface-stone skill the rest, and stone is
+  the one that misses. No interval is quoted: six rollouts of six steps
+  is not a sample that carries one, so the per-seed rows are given.
+  Box state beside it: MemAvailable 69 GB at the start, 45 GB at the
+  end; load 11.6 -> 14.3; the private world's lease at 1.4 G resident
+  against a 3.0 G peak; jax CPU-only with
+  XLA_PYTHON_CLIENT_PREALLOCATE=false in every entry point. The
+  community's world, bots, reflex and d1 ran throughout and were not
+  touched: **0 plays by the gym's bot in the community's ledger**. A
+  skill in the world costs 36-85 s of real walking, which is why the
+  matrix is three seeds and not thirty.
+- The lab note with the whole story: `docs/lab/exp-agent-world-gym.md`.

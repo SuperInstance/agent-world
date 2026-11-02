@@ -3,6 +3,12 @@
 **Status:** the pipeline runs end to end. This is the first pass — a smoke
 student against a random policy, three seeds, in the world's own units.
 
+**The answer, in one line:** a student cloned from the community's own
+ledger gathered **6.00 materials per 6-step episode against a random
+policy's 4.00**, and hit the ceiling on every seed (6, 6, 6 against 3,
+5, 4). The community's morning, read as a dataset, is worth more than
+guessing.
+
 ## What was asked
 
 From the desk brief (`BRIEF.md`, 2026-11-02):
@@ -98,7 +104,84 @@ Five pieces, all on branch `gym` of `agent-world`:
 
 ### The numbers
 
-*(filled in below from the run's report)*
+The run: 2026-11-02 16:36:09Z → 18:28:35Z (1 h 52 m), role **gatherer**,
+6-step episodes, 3 seeds × 2 episodes per arm. Report:
+`runtime/reports/smoke-20261102-073610.json`. Script:
+`gym/scripts/smoke.py` (run it with `gym/ops/run-smoke.sh`).
+
+**The datasets** (every frame kept, nothing filtered):
+
+| dataset | episodes | frames |
+|---|---:|---:|
+| `gym/gatherer-community-20261102-073610-v0` — the live community, read-only from the ledger | 20 | **72,388** |
+| `gym/gatherer-private-20261102-073610-v0` — the private world, scripted | 3 | 18 |
+
+The action space is **41** options: the library's 13 live skills plus every
+option the community has ever chosen (retired versions and project steps
+included), so a student cloned from the community can be played in the
+private world with no translation table.
+
+**The students** (a linear softmax policy over the state facts, maximum
+likelihood in numpy; the held-out split is by **episode**, never by frame):
+
+| student | training frames | held-out frames | train agreement | held-out agreement |
+|---|---:|---:|---:|---:|
+| `bc-community` | 48,163 | 24,225 | 0.733 | **0.951** |
+| `bc-private` | 12 | 6 | 0.500 | 0.167 |
+
+**The rollouts** — the world's own achievements-equivalent, projects and
+gathers per 6-step episode:
+
+| arm | seed 0 | seed 1 | seed 2 | **gathers/episode** | projects/episode | reward/episode | refused/episode |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **`bc-community`** (cloned from the community) | 6 | 6 | 6 | **6.00** | 0.00 | 6.00 | 0.00 |
+| `bc-private` (cloned from 18 scripted frames) | 0 | 0 | 6 | 2.00 | 0.00 | 2.00 | 0.00 |
+| `random` (uniform over the eligible options) | 3 | 5 | 4 | 4.00 | 0.00 | 4.00 | 0.00 |
+
+**The reading.** The student that watched the community gathered **6.00
+per episode against the random policy's 4.00** — a 50 % relative gain,
+and it hit the ceiling (6 of 6 steps won) on *every* seed, where the
+random policy's three seeds were 3, 5 and 4. The mechanism is visible in
+the world's own log: the community's gatherer had spent the morning
+evolving its wood skill (g15: "go home, find a tree at any level, chop a
+log, leave the bag at the depot" — it searches 96 blocks at any level and
+walks on when it misses), and the student cloned from 72,388 frames plays
+*that* skill every time. The random policy picks the same skill about a
+third of the time and the skill that mines surface stone the rest, and
+stone is the one that misses.
+
+Two honest limits on that reading:
+
+- **no interval is quoted.** Six rollouts of six steps is not a sample
+  that carries an interval; the per-seed rows are given instead.
+- **the gatherer never builds**, so the projects column is empty for
+  every arm by construction. The other half of the achievements-equivalent
+  needs the builder's role to be rolled out.
+
+**The community's own rate**, in the same units, for scale: **140.5
+gathers and 0.6 projects per episode**, from 146.9 wins in 3,598 plays
+per episode. A community episode is a bot's whole run and a gym episode
+is six steps, so the two per-episode numbers are **not** comparable —
+what is comparable is the per-play rate: the community gathers 3.9 % of
+its plays, the cloned student gathers 100 % of its steps, the random
+policy 66.7 %.
+
+**Box state beside the numbers.** The Thor, aarch64, 122 GB, 15 h uptime.
+MemAvailable **69 GB at the start of the run, 45 GB at the end** (the
+run's own footprint is small; another seat's 40 GB lease came and went
+alongside it); load 11.6 → 14.3 over the run. The private world held
+lease `agent-world-gym.mc` (peak 3.0 G, 1.4 G resident). jax is CPU-only
+(`jax[cpu]`: "a CUDA-enabled jaxlib is not installed, falling back to
+cpu") and `XLA_PYTHON_CLIENT_PREALLOCATE=false` is set in every entry
+point. The community's world (25565), its bots, the reflex and d1 were
+running the whole time and were not touched: **0 plays by the gym's bot
+in the community's ledger**.
+
+**The cost of a step.** A skill in the world costs **36–85 seconds** of
+real walking, so a 6-step episode is 4–8 minutes and the whole matrix
+(3 arms × 3 seeds × 2 episodes + 18 recorded steps) is 1 h 52 m. This is
+the real cost of rolling out in a Minecraft world, and it is why the
+number of seeds is three and not thirty.
 
 ## What it makes possible
 
