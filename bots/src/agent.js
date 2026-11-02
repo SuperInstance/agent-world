@@ -20,6 +20,7 @@
 
 const crypto = require('node:crypto');
 const mineflayer = require('mineflayer');
+const { goals } = require('mineflayer-pathfinder');
 const { buildApi, createSandbox, givePathfinding } = require('./api');
 const { isAgent, parseCommand, HELP_LINE } = require('./humanity');
 
@@ -267,18 +268,24 @@ class Agent {
       if (!this.iAmNearestTo(username)) return;
     }
 
-    this.handleCommand(parsed.command, username);
+    this.handleCommand(parsed.command, username, Boolean(parsed.addressee));
   }
 
-  /** Am I the closest builder to this person? Ties go to the first name. */
+  /** Am I the closest builder to this person? Ties go to the first name.
+   *
+   * A player's position lives on their *entity* (mineflayer's player
+   * list carries no position of its own), and an entity is tracked
+   * only while it is in view — so a person far from every builder has
+   * no position anyone can rank, and nobody claims the command until
+   * they are near enough to be seen. */
   iAmNearestTo(speaker) {
-    const them = this.bot.players[speaker];
-    if (!them || !them.position) return false;
+    const them = this.playerPosition(speaker);
+    if (!them) return false;
     let best = null;
     let bestDistance = Infinity;
     for (const other of this.community) {
       if (!other.bot || !other.bot.entity) continue;
-      const distance = other.bot.entity.position.distanceTo(them.position);
+      const distance = other.bot.entity.position.distanceTo(them);
       if (distance < bestDistance - 0.5 || (distance < bestDistance + 0.5 && best && other.name < best.name)) {
         best = other;
         bestDistance = Math.min(bestDistance, distance);
@@ -287,14 +294,38 @@ class Agent {
     return best === this;
   }
 
-  /** Where a player is, or null if they are gone. */
+  /** Where a player is, or null if they are out of sight (or gone). */
   playerPosition(name) {
-    const player = this.bot.players[name];
-    if (!player || !player.position) return null;
-    return player.position;
+    const entity = this.playerEntity(name);
+    return entity ? entity.position : null;
   }
 
-  handleCommand(command, from) {
+  /** The player's entity, the thing a follow can hold on to. */
+  playerEntity(name) {
+    const player = this.bot.players[name];
+    if (player && player.entity) return player.entity;
+    return (
+      Object.values(this.bot.entities).find(
+        (e) => e && e.type === 'player' && e.username === name && e.position
+      ) || null
+    );
+  }
+
+  /** The last place a player was seen — a person who runs out of view
+   *  is still there, and a follower that wants to keep up walks to
+   *  where they went. */
+  rememberPlayer(name, position) {
+    if (!this._remembered) this._remembered = new Map();
+    this._remembered.set(name, { position: position.clone(), at: Date.now() });
+  }
+
+  rememberedPlayer(name, withinMs) {
+    const row = this._remembered && this._remembered.get(name);
+    if (!row || Date.now() - row.at > withinMs) return null;
+    return row.position;
+  }
+
+  handleCommand(command, from, addressed = false) {
     // The word is logged, never the line around it: a person's words
     // are theirs (the privacy rule), and the crew's obedience is the
     // world's own record.
@@ -325,7 +356,11 @@ class Agent {
         this.setDuty({ kind: 'home', expires: 2 * 60 * 1000 }, 'heading to the depot');
         return;
       case 'what-doing': {
-        if (Date.now() - this.lastRepliedAt < 15000) return;
+        // A person who picked this builder by name is owed the answer
+        // even if the crew answered a moment ago; the plain question
+        // is rate-limited so four questions in a row are four
+        // conversations, not one echo.
+        if (!addressed && Date.now() - this.lastRepliedAt < 15000) return;
         this.lastRepliedAt = Date.now();
         const doing = this.duty
           ? {
@@ -352,8 +387,13 @@ class Agent {
     }
   }
 
-  /** A job from a person outranks the reflex until it is done. */
+  /** A job from a person outranks the reflex until it is done. The
+   *  `expires` given here is how long the job may run; the clock starts
+   *  now. (The first battery run had it read as a timestamp, so every
+   *  duty was born already expired — nine seconds of gathering, then
+   *  "the duty ran out of time".) */
   setDuty(duty, line) {
+    duty.expires = Date.now() + duty.expires;
     duty.since = new Date().toISOString();
     this.duty = duty;
     this.interrupt(); // whatever walk was under way stops for the person
@@ -364,13 +404,21 @@ class Agent {
   clearDuty(why) {
     if (!this.duty) return;
     this.log.note({ bot: this.name, event: 'duty_clear', kind: this.duty.kind, why });
+    // A follow holds the planner with a dynamic goal; let it go with
+    // the duty.
+    if (this.duty.kind === 'follow') this.interrupt();
     this.duty = null;
   }
 
-  /** Stop the walk under our feet, if there is one. */
+  /** Stop the walk under our feet, if there is one. A dynamic goal
+   *  (the follow) is cleared too, or the planner would pick it up
+   *  again the moment it is asked anything else. */
   interrupt() {
     try {
-      if (this.bot.pathfinder) this.bot.pathfinder.stop();
+      if (this.bot.pathfinder) {
+        this.bot.pathfinder.stop();
+        this.bot.pathfinder.setGoal(null);
+      }
     } catch (err) {
       // Nothing was walking.
     }
@@ -387,17 +435,34 @@ class Agent {
   async serviceDuty() {
     const duty = this.duty;
     if (!duty) return;
-    const them = duty.player ? this.playerPosition(duty.player) : null;
+    let them = duty.player ? this.playerPosition(duty.player) : null;
+    if (them) this.rememberPlayer(duty.player, them);
     if (duty.player && !them) {
-      this.clearDuty(`${duty.player} left the world`);
-      return;
+      // Out of view is not gone: if they are still on the world's list
+      // and were seen just now, walk to where they went.
+      const remembered = this.rememberedPlayer(duty.player, 30000);
+      const stillListed = Boolean(this.bot.players[duty.player]);
+      if (remembered && stillListed) {
+        them = remembered;
+      } else {
+        this.clearDuty(`${duty.player} left the world`);
+        return;
+      }
     }
 
     if (duty.kind === 'follow') {
-      if (this.bot.entity.position.distanceTo(them) > 4) {
-        await this.api.move_to(
-          Math.floor(them.x), Math.floor(them.y), Math.floor(them.z)
-        );
+      // A follow is not a series of walks to where the person *was*:
+      // the planner's own GoalFollow holds the person's entity and
+      // re-targets as they move, which is the difference between
+      // keeping up and arriving where they stood ten seconds ago.
+      const entity = this.playerEntity(duty.player);
+      if (entity && entity !== duty.goalEntity) {
+        duty.goalEntity = entity;
+        try {
+          this.bot.pathfinder.setGoal(new goals.GoalFollow(entity, 3), true);
+        } catch (err) {
+          // The planner could not take the goal; the next tick tries again.
+        }
       }
       return;
     }
@@ -476,7 +541,9 @@ class Agent {
           ? ['oak_log', 'spruce_log', 'birch_log', 'cherry_log', 'dark_oak_log', 'jungle_log', 'acacia_log', 'mangrove_log', 'pale_oak_log']
           : ['cobblestone', 'stone', 'cobbled_deepslate'];
       const taken = await this.api.take_from_depot(names);
-      const target = this.playerPosition(duty.player);
+      const target =
+        this.playerPosition(duty.player) ||
+        this.rememberedPlayer(duty.player, 60000);
       if (!target) {
         this.clearDuty(`${duty.player} left the world`);
         return;

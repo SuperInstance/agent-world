@@ -53,10 +53,14 @@ bot.on('kicked', (reason) => {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function crewPositions() {
+  // A player's position lives on their entity (the player list carries
+  // none of its own), so say nothing about a builder out of view
+  // rather than something wrong.
   const out = {};
   for (const name of CREW) {
     const player = bot.players[name];
-    if (player && player.position) out[name] = player.position;
+    const position = player && player.entity ? player.entity.position : null;
+    if (position) out[name] = position;
   }
   return out;
 }

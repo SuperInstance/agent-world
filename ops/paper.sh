@@ -60,6 +60,21 @@ render_properties() {
     sed -e "s|@IP@|$ip|" -e "s|@SEED@|$AW_LEVEL_SEED|" \
         "$AW_ROOT/ops/world/server.properties.template" \
         > "$AW_SERVER_DIR/server.properties"
+    # The playtest door (Casey, 2026-11-01: "playable with the agents
+    # live"). The whitelist itself stays in ops/world/whitelist.txt —
+    # it is the intent for when the world is published — but while
+    # AW_PLAYTEST=1 the door stands open for anyone on the LAN, which
+    # is what playing with the family needs. (A plain restart used to
+    # quietly re-arm the whitelist: rendering the template reset
+    # white-list=true every start, undoing a hand-run "whitelist off"
+    # from the console — which is how the first battery run was
+    # refused at the door.)
+    if [ "${AW_PLAYTEST:-1}" = "1" ]; then
+        sed -i -e "s/^white-list=true/white-list=false/" \
+               -e "s/^enforce-whitelist=true/enforce-whitelist=false/" \
+               "$AW_SERVER_DIR/server.properties"
+        warn "playtest: the whitelist is OFF for this start (AW_PLAYTEST=1)"
+    fi
     cp "$AW_ROOT/ops/world/eula.txt" "$AW_SERVER_DIR/eula.txt"
     say "server.properties rendered (bind $ip:$AW_PAPER_PORT, seed $AW_LEVEL_SEED)"
 }
@@ -73,6 +88,15 @@ render_properties() {
 # **intent**, and the console commands are how the intent is applied:
 # every start re-applies it, which is idempotent.
 sync_whitelist() {
+    # In playtest the door stands open (see render_properties), and the
+    # console's "whitelist add" can itself re-arm enforcement on Paper —
+    # so in playtest the names are left as they are and the whitelist is
+    # said off, out loud, once.
+    if [ "${AW_PLAYTEST:-1}" = "1" ]; then
+        tmux send-keys -t "$TARGET" -l "whitelist off" </dev/null 2>/dev/null || true
+        tmux send-keys -t "$TARGET" Enter </dev/null 2>/dev/null || true
+        return 0
+    fi
     local name
     while read -r name; do
         # Skip the comments and the blank lines: the file is written for
