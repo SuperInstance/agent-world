@@ -216,10 +216,18 @@ number of seeds is three and not thirty.
   per-seed rows beside them.
 - **One role.** The gatherer. The builder and the farmer are the same
   machinery with a different option set, but they were not rolled out.
-- **The local block grid was read but never taught from.** The grid works
-  (it returns the world's blocks), but the community's ledger holds no
-  grids, so a grid-capable student cannot be cloned from the community
-  at all. The grid is therefore off by default.
+- **The local block grid does not work, and is off by default.** The grid
+  is implemented, the vocabulary and the encoder are unit-tested, and the
+  bridge sends the right 75 cells — but **every cell reads "unknown"** in
+  the live private world, so the grid carries no information. The
+  community's ledger holds no grids either, so a grid-capable student
+  could not be cloned from the community at all. Two reasons to leave it
+  off: it does not work, and there is nothing to teach it from. The cause
+  was not pinned down: `bot.blockAt` returns null for every position in
+  this mineflayer build, and the world it reads (`prismarine-world`'s
+  `getBlock`) is `async`, so the sync path mineflayer's `blockAt` takes
+  may not be the one the installed build uses. That is a lead, not a
+  finding.
 - **The community's episodes are not comparable to the gym's episodes.**
   A community episode is a bot's whole run (3,598 plays on average); a
   gym episode is 6 steps. The per-episode numbers are therefore not
@@ -256,10 +264,17 @@ number of seeds is three and not thirty.
    bag is now emptied with the promise API, and every step of the episode
    boundary (toss, walk home, respawn) is capped, so a wedged agent
    cannot hold the run open.
-4. **The block grid read "unknown" everywhere.** `bot.blockAt` takes a
-   position, not three numbers; the bridge was passing bare numbers, so
-   every cell of the grid came back empty. It now reads the way the
-   world's own api reads (`new Vec3(x, y, z)`).
+4. **The block grid read "unknown" everywhere — and still does.**
+   `bot.blockAt` takes a position, not three numbers; the bridge was
+   passing bare numbers, so every cell of the grid came back empty. It
+   reads the way the world's own api reads now (`new Vec3(x, y, z)`),
+   and the bridge loads Vec3 from the world's shared `node_modules`
+   because the gym's checkout has none of its own (Node only looks in the
+   directories above the one that asks). **That was not the whole
+   cause**: with the fix in, the grid still reads "unknown" in all 75
+   cells of the live world. The grid stays off, the claim above stands,
+   and the cause is an open lead (`prismarine-world`'s `getBlock` is
+   `async`; mineflayer's `blockAt` takes the sync path).
 
 ## How to reproduce
 

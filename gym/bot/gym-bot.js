@@ -21,11 +21,28 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { Vec3 } = require('vec3');
 
 const { Agent } = require('../../bots/src/agent');
 const { gotoNear } = require('../../bots/src/api');
 const { Log } = require('../../bots/src/log');
+
+/**
+ * Vec3, from the world's own installed copy.
+ *
+ * The gym's checkout has no ``node_modules`` of its own -- the world's
+ * copy is shared (gym/ops/gym-world.sh setup links it), and Node only
+ * looks for a module in the directories above the one that asks. So the
+ * direct name is tried first and the shared copy is the fallback.
+ */
+function loadVec3() {
+  try {
+    return require('vec3').Vec3;
+  } catch (err) {
+    return require('../../bots/node_modules/vec3').Vec3;
+  }
+}
+
+const { Vec3 } = loadVec3();
 
 const REPO = path.resolve(__dirname, '..', '..');
 
