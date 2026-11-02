@@ -435,3 +435,77 @@ re-run.
   semantics, and the replant proposal when the terrace singles run
   out. The world runs on: paper, bots, reflex, d1, drift-watch,
   community-watch, all detached.
+
+- 14:00–14:40 — day two, the five CONTINUE priorities, four fixed and
+  the fifth turned over to the crew. **(1) The "Pebble disconnects"
+  were never a world fault**: every mystery disconnect (paper.log
+  local 03:13:20, 03:23:31, 03:30:04, 03:42:09, 04:00:03, 04:26:41 —
+  UTC 12:13–13:26) has **all four bots leaving the same second** and a
+  staggered rejoin ~10 s later, with ProbeD/W/G connections between:
+  those were the previous seat's own `ops/bots.sh restart` calls while
+  patching delivery code (tmux kill-window is a SIGHUP; the graceful
+  quit path never ran). `cmd_stop` now SIGTERMs the window's leaves
+  first (`bot.quit('the world is resting')`), then kills the window;
+  the orphan reflex from the 09:36 restart (no port, PID 2834293) is
+  killed. **(2)** the drift success signal is one-sided at the source
+  (drift-pause 4baf697, floored at zero — the signed form let the rate
+  gate fire on a rise from far-above-reference to slightly-above-it,
+  Pebble 06:45); the watcher restarted onto it at 13:59 and its first
+  window read "nothing in alarm" where the five minutes before planned
+  a Pebble success hold. **(3)** bills count the bench: CRAFTED_FROM
+  gains `crafting_table` (4 planks = 1 log), `benchNear` mirrors the
+  craft-time 16, and depot-chest/farm bills add the bench only when
+  the site has none (rawBill: chest+bench 3 logs; hoe+bench+14 seeds
+  2 logs + seeds). **(4)** seeds by the patch: `gatherSeeds` breaks a
+  90 s run per step at reach 48 — the old one-break-per-step cadence
+  (~36 s a break) put 14 seeds at more than an hour. **(5)** the gully
+  itself: a `ramp` project kind that carves the way out — each step a
+  cell dug down to the standing level and finished with scoped
+  cobble, terraform, not construction (a place-only plan cannot cross
+  the 4-high mossy wall; probe-column.js read the wall, the floating
+  lip at y66, and the crew floor y61-64). `surfaceAt` now skips ALL
+  leaves — spruce canopy counted as ground made the spawn slope a
+  y69 plateau and the first planner run refused a gully it could not
+  see.
+- 14:29 — the council proposed the ramp on its own (b058, 7 steps)
+  and the validator **denied** it for the right reason:
+  TestHumanH's coarse_dirt (5,67,2 / 4,66,2) inside the site. The
+  deny drew two real flaws out of the plan: steps through the visitor
+  keep-out, and the **chest's own column held as a step** — carved, it
+  would have dug the depot chest out of its terrace. Fixed (keep-out
+  skip in the planner, goal column never a candidate, a chest guard
+  in the executor, site hugging the plan), tests 9/9 on the real
+  visitor coordinates (c9d23fc).
+- 14:38:41 — **b060 allowed**: 6 cobble steps SW of the chest
+  ((-2,62,-4) … (-3,67,-6)), site r=4 — kind:known, scope:bounded,
+  site:known, materials:gatherable. The builder owns it; the unattended
+  stretch (projects done per hour is the headline) starts here.
+
+- 15:00–16:00 — the ramp's executor earned its keep the hard way, one
+  honest refusal at a time. The builder's quarry looped "quarried a
+  stone" without ever holding one (a dig that reported success without
+  checking its own outcome), then refused honestly ("too deep: the
+  community mines no lower than y=48" — the nearest bare stone to the
+  gully is a cave wall twenty blocks down), then found nothing at all
+  (find_block's default window is ±2 of the builder's own feet; the
+  pit's stone sits at y58–62 below them) — and the instrumented
+  refusal named the real state: **the builder itself was at y38–40**,
+  mined underground between project steps by its own library skills
+  (the playable round's pit failure, alive in the bandit's repertoire;
+  probe-find.js: 96 stone spots within 32 of the gully floor, so the
+  world had stone all along). buildRamp now stands at the work BEFORE
+  gathering for it — a search from the site finds the stone the site
+  sits on — and the quarry is bounded `min_y: 49, any_level: true`.
+  The drift watcher held Timber (soft, spend signal) over the wasteful
+  stretch — the supervision doing exactly its job — and the hold lapses
+  at its TTL.
+- The seeds taught their own lesson: the batching worked (runs of
+  90–115 s, the first seed of the day arrived), but by 15:40 the
+  farm's own terrace was ground bare — "0 grass broken" every tick
+  within 48, and nothing within 96 either. The seed economy of the
+  spawn slope is spent. The owner's gate is back to one-seed (a seed
+  in hand is a seed in the ground, and wheat pays its own seeds
+  back), and the gatherer's forage reaches 160 for untouched patches.
+  What the world still owes itself: a wheat cycle (plant-harvest-
+  replant) so seeds compound instead of being mined out of the grass
+  — that is next-seat work, recorded under risks.

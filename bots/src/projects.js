@@ -250,23 +250,32 @@ async function growFarm(agent, project) {
     return { done: false, detail: 'crafted the hoe' };
   }
 
-  if (wheat.length && agent.api.inventory_count('wheat_seeds') < wheat.length) {
+  if (wheat.length && agent.api.inventory_count('wheat_seeds') < 1) {
     // Delivered seeds may be lying at the site (a supply toss skids):
-    // pick them up before grinding for more.
+    // pick them up before grinding for more. The gate is one seed,
+    // not the whole plot's want: a seed in hand is a seed in the
+    // ground, and the ground's wheat pays its own seeds back (the
+    // batched gather fills the rest — all-or-nothing held 1 seed
+    // idle against a 14-seed want on a ground-bare terrace,
+    // 2026-11-02).
     await agent.api.pickup_near(project.site.x, project.site.z, 8);
-    if (agent.api.inventory_count('wheat_seeds') < wheat.length) {
+    if (agent.api.inventory_count('wheat_seeds') < 1) {
       // short_grass is this version's seed-bearing plant ("grass" is
-      // not in the registry); the terrace by the farm is covered in it.
-      // One batched run per step, not one break: the want is the whole
-      // plot's seeds, and the patch is walked once.
+      // not in the registry); one batched run per step. When the
+      // patch within reach is gone — the farm's own terrace was
+      // ground bare by the afternoon — the owner waits for the
+      // gatherer's forage instead of spinning on it every tick.
       const run = await gatherSeeds(agent, wheat.length);
-      if (run.broken === 0 && agent.api.inventory_count('wheat_seeds') < 1) {
+      if (run.broken === 0) {
         await standNear(agent, project.site.x, project.site.y, project.site.z);
-        return { done: false, detail: 'no seed grass within reach of the farm' };
+        return {
+          done: false,
+          detail: `no seed grass within reach of the farm (${agent.api.inventory_count('wheat_seeds')} of ${wheat.length} in hand); the gatherer forages farther`,
+        };
       }
       return {
         done: false,
-        result: run.broken ? 'win' : undefined,
+        result: 'win',
         detail: `seed run: ${run.broken} grass broken, ${agent.api.inventory_count('wheat_seeds')} of ${wheat.length} seeds in hand`,
       };
     }
@@ -369,20 +378,48 @@ async function buildRamp(agent, project) {
   if (!missing.length) {
     return { done: true, detail: 'every step of the ramp stands' };
   }
+  // Stand at the work BEFORE gathering for it. The bandit's library
+  // skills mine the builder away between project steps (15:29 UTC:
+  // the quarry search ran from y38, twenty blocks under the gully,
+  // the playable round's own failure still alive) — a search from the
+  // site finds the stone the site sits on; a search from wherever the
+  // bandit left the builder finds nothing.
+  const lowest = missing.slice().sort((a, b) => a.y - b.y)[0];
+  await standNear(agent, lowest.x, lowest.y, lowest.z);
   const have = agent.api.inventory_count('cobblestone');
   if (have < 1) {
     const taken = await agent.api.take_from_depot(['cobblestone']);
     if (taken && taken.ok) return { done: false, detail: `took ${taken.count} cobblestone from the depot` };
     if (have < 1) {
       // The world's surface stone is the ramp's own material: a step or
-      // two of quarrying pays for a step of stairs.
-      const stone = agent.api.find_block({ names: ['stone', 'cobblestone'], max_distance: 24 });
+      // two of quarrying pays for a step of stairs. The search is
+      // bounded above the mining floor — the nearest bare stone to the
+      // gully is a cave wall twenty blocks DOWN, and the workface's
+      // own depth rule refused every quarry the planner asked for
+      // (15:06–15:11 UTC, "too deep").
+      const stone = agent.api.find_block({
+        names: ['stone', 'cobblestone'],
+        max_distance: 24,
+        min_y: 49,
+        any_level: true,
+      });
       if (stone) {
-        await agent.api.dig(stone.x, stone.y, stone.z);
-        return { done: false, detail: 'quarried a stone for the steps' };
+        const dug = await agent.api.dig(stone.x, stone.y, stone.z);
+        await agent.api.pickup_near(stone.x, stone.z, 4);
+        return {
+          done: false,
+          result: dug.ok ? 'win' : undefined,
+          detail: dug.ok ? 'quarried a stone for the steps' : `the quarry failed: ${dug.detail}`,
+        };
       }
+      const where = agent.position();
       await standNear(agent, project.site.x, project.site.y, project.site.z);
-      return { done: false, detail: 'waiting at the site for cobblestone' };
+      return {
+        done: false,
+        detail:
+          `waiting at the site for cobblestone ` +
+          `(no stone within 24 above y49 from ${where ? `${where.x},${where.y},${where.z}` : 'nowhere'})`,
+      };
     }
   }
   // The lowest missing step first: the staircase is built from the
@@ -701,7 +738,12 @@ async function supplyStep(agent, board) {
     // y43 — probe, 2026-11-02). The terrace by the farm is covered in
     // short_grass and fern. One batched run per step fills the whole
     // want — one break per step was the hour-long grind (2026-11-02).
-    const run = await gatherSeeds(agent, want.count);
+    // The forage reaches past the farm's own worn terrace: the owner
+    // grinds what stands within 48, the supply run goes far for the
+    // patches nobody has touched (the farm's terrace was ground bare
+    // by the afternoon of 2026-11-02 — 1 seed in hand, "0 grass
+    // broken" every tick, and nothing left within 96 either).
+    const run = await gatherSeeds(agent, want.count, { reach: 160, seconds: 150 });
     if (run.broken === 0) {
       return { done: false, detail: 'no seed grass within reach' };
     }
