@@ -831,9 +831,18 @@ async function supplyStep(agent, board) {
       // standing at the gatherer's own level.
       walks += 1;
       const dug = await agent.api.dig(log.x, log.y, log.z);
-      if (dug.ok) {
+      if (dug.ok && dug.detail.includes('collected it')) {
         HUNT_MEMORY.delete(key);
         return { done: false, result: 'win', detail: dug.detail };
+      }
+      if (dug.ok) {
+        // A dig that paid nothing is a refusal about THIS tree: the
+        // drop fell where the collector could not stand (a trunk on a
+        // slope), and mining it again pays nothing again (five logs
+        // mined for an empty bag, 2026-11-02 20:32-20:44Z). The tree
+        // cools ten minutes and the next candidate is tried.
+        refused(key, `(${log.x},${log.y},${log.z}) dig paid nothing`);
+        continue;
       }
       if (!dug.detail.includes('not mining') && !dug.detail.includes('too deep')) {
         return { done: false, detail: dug.detail };

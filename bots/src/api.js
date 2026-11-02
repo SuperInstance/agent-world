@@ -747,6 +747,7 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       try {
         await approach(bot, block.position);
         await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
+        const bagBefore = bot.inventory.items().reduce((s, i) => s + i.count, 0);
         await bot.dig(block);
         // The dig is a packet, not a promise: the server refuses one
         // that is out of reach, and mineflayer does not notice. So the
@@ -768,9 +769,17 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
         // for hours and never carried anything, and the world would
         // look like it was working while it was not.
         const collected = await collectAt(bot, block.position);
+        // The bag is the truth, not the walk: a collection that
+        // chased the wrong entity (or none) still "returns true"
+        // while the drop lies on the slope — the gatherer mined five
+        // logs for an empty bag this way (2026-11-02 20:44Z).
+        const bagAfter = bot.inventory.items().reduce((s, i) => s + i.count, 0);
+        const gained = bagAfter > bagBefore;
         return {
           ok: true,
-          detail: collected ? `mined ${block.name} and collected it` : `mined ${block.name}`,
+          detail: gained
+            ? `mined ${block.name} and collected it`
+            : `mined ${block.name}, but the drop is still out there`,
         };
       } catch (err) {
         return { ok: false, detail: String((err && err.message) || err) };
@@ -1050,13 +1059,17 @@ async function collectAt(bot, position) {
   }
   // If the item is still lying about, go to the item itself: the block
   // position is close, but "close" is not "inside the pickup range".
-  return collectEntity(bot);
+  return collectEntity(bot, position);
 }
 
-/** Walk to the dropped item that is nearest, so it is picked up. */
-async function collectEntity(bot) {
+/** Walk to the dropped item nearest THE DIG (not the nearest anywhere:
+ *  a stray seed three blocks over is not this dig's collection, and
+ *  chasing it walks away from the log that just fell), so it is
+ *  picked up. */
+async function collectEntity(bot, near) {
   const drops = Object.values(bot.entities).filter(
     (e) => e && e.position && (e.name === 'item' || e.name === 'Item' || e.name === 'item_stack')
+      && (!near || e.position.distanceTo(new Vec3(near.x, near.y, near.z)) < 8)
   );
   if (!drops.length) return false;
   const drop = drops.sort(
@@ -1068,7 +1081,7 @@ async function collectEntity(bot) {
   } catch (err) {
     return false;
   }
-  await new Promise((resolve) => setTimeout(resolve, 800));
+  await new Promise((resolve) => setTimeout(resolve, 1500));
   return true;
 }
 
