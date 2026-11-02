@@ -606,3 +606,28 @@ re-run.
   blocks). All four bots back, staggered 18:56:19–18:56:37Z. Ramp
   tests 9/9, drift suite 71 passed. The unattended stretch (the
   headline measurement) starts here.
+- 19:06–19:36 — the first unattended half-hour bought three more
+  catches, each fixed and committed: **(1)** the seed forage was
+  level-blind (find_block's default band is feet±2; Pebble in the pit
+  at y64 read "no seed grass within reach" while forty stems stood at
+  y71 — the wood hunt's own gully blindness, on the seed path;
+  gatherSeeds passes any_level now), and an empty run backed off 45 s
+  instead of re-issuing every tick (the seed spin, 30 instant plays a
+  minute, 04f4da9). The first honest seed run: 5 grass broken over
+  170 s, 0 of 14 seeds — the drop rate is about one seed in eight
+  stems; the wheat cycle is what makes seeds compound, the grind is
+  real. **(2)** my own range-0 collection stood the builder IN the
+  cell it was about to fill, and the server silently refuses to place
+  a block where a player stands — "Server did not answer the
+  placement", four timeouts on one wall cell; api.place steps one
+  cell aside now (b0bd934). **(3)** the deepest: b069's site was
+  inside a dense spruce grove — surfaceAt skips leaves and logs, so
+  the spot read standable while trunks stood in the wall cells and
+  the canopy filled the roof band (probe-site.js). The walk into the
+  canopy pocket hung the planner itself (probe-walk-shelter.js:
+  GoalNear unresolved after 170 s). The shelter planner now requires
+  three clear cells above the ground across the footprint and tries
+  eight candidate rings; buildPlanned names "cannot reach" instead of
+  firing a doomed placement; b069 rides its stall clock to abandon
+  (~20:27Z) and the next proposal recomputes on clear ground
+  (0287291). TPS 20.0 throughout; grief 0.
