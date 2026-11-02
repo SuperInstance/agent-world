@@ -507,6 +507,14 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
             openChest.close();
             openChest = null;
           }
+          // Bare-handed before the window (a use with a held block is
+          // a place, not an open — probe-chest.js timed out holding
+          // its own dirt, 2026-11-02).
+          try {
+            await bot.unequip('hand');
+          } catch (err) {
+            // Nothing was held.
+          }
           const container = await bot.openContainer(chest);
           await new Promise((resolve) => setTimeout(resolve, 400));
           let put = 0;
@@ -592,6 +600,14 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
           if (openChest) {
             openChest.close();
             openChest = null;
+          }
+          // Bare-handed before the window (a use with a held block is
+          // a place, not an open — probe-chest.js timed out holding
+          // its own dirt, 2026-11-02).
+          try {
+            await bot.unequip('hand');
+          } catch (err) {
+            // Nothing was held.
           }
           const container = await bot.openContainer(chest);
           await new Promise((resolve) => setTimeout(resolve, 400));
@@ -924,6 +940,16 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
           // The walk is best effort; the craft below says its own
           // truth if the window still will not open.
         }
+      }
+      // And an empty hand opens what a full hand cannot: a use packet
+      // with a held block is a PLACE, not a USE, on this protocol —
+      // the farmer holding the very log it came to split, and the
+      // chest probe holding its dirt, both timed out on windowOpen
+      // (21:37Z, and probe-chest.js). Windows open bare-handed.
+      try {
+        await bot.unequip('hand');
+      } catch (err) {
+        // Nothing was held, or the swap is already done.
       }
       const recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
       if (!recipes.length) {

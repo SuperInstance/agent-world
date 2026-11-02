@@ -23,6 +23,8 @@ bot.once('spawn', async () => {
   const chestBlock = bot.blockAt(new Vec3(-2, 68, -5));
   log('chest block:', chestBlock ? chestBlock.name : 'null');
   try {
+    await bot.unequip('hand');
+    log('hand emptied; heldItem:', bot.heldItem ? bot.heldItem.name : 'empty');
     const chest = await bot.openContainer(chestBlock);
     log('chest OPENED; container slots:', chest.containerItems().length,
       chest.containerItems().slice(0, 4).map((i) => `${i.name}x${i.count}`).join(' '));
