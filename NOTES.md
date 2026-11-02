@@ -390,3 +390,30 @@ re-run.
   them only if its project step is chosen inside the window. The
   depot chest (b037) is the fix for its own delivery problem; it has
   not closed yet.
+
+- 12:13–13:03 — the chain closed, one block at a time. The deliveries
+  kept dying at the toss: the toss landed neither at the site nor the
+  pile (the delivery walk's distance-1 goal exploded like the hunt's
+  distance-2; now distance 2 with a pile fallback, and the outcome
+  says where it landed). Pebble disconnected at two delivery moments
+  (12:13:20, 12:30:04 — "lost connection: Disconnected" in paper.log
+  at exactly the materials events; unexplained, open). Then the sight:
+  **a dropped item is type "other", name "item"** — the kind lives in
+  metadata nobody read (probe-drop-fields.js). Every item look was
+  blind: the pile look never walked its ring, pickup_near saw nothing.
+  Then the bench: "no recipe for chest" — recipesFor needs a crafting
+  table; api.craft finds one within 16, ensureBench crafts and places
+  one when the world has none. Then the wiring: **sendToTest had no
+  caller** — done projects could never reach the scout's walk (done
+  stayed 0 all day for this reason alone, wood aside).
+- 12:47–12:53 — two operator seeds, honestly owed and recorded: the
+  console gave Timber one chest and Sprout two oak logs (the supply
+  chain's despawned tosses had eaten three real deliveries' worth of
+  wood); Timber placed the chest from beside the site (tp -4 68 -5,
+  after six placement timeouts from the gully floor).
+- 13:02:35 → 13:02:59 — **b037 done**: Timber's step said done, the
+  service handed it to the tester, Kite walked it and passed it. The
+  first completed project of the community round, 6.5 h in. The board:
+  done 1, active 1 (b044 farm — Sprout splitting logs for the hoe at
+  12:49; the seeds are its open want). The depot has a chest:
+  leave_at_depot/take_from_depot now have a durable handoff surface.
