@@ -386,41 +386,29 @@ async function buildRamp(agent, project) {
   // bandit left the builder finds nothing.
   const lowest = missing.slice().sort((a, b) => a.y - b.y)[0];
   await standNear(agent, lowest.x, lowest.y, lowest.z);
-  const have = agent.api.inventory_count('cobblestone');
+  // Dirt is the step: it drops to any hand, and the carve itself is
+  // dirt — the steps pay for themselves out of the ground they are
+  // cut into. (The whole cobblestone economy of the first attempt —
+  // quarry, pickaxe, bench — died on one fact this world taught the
+  // hard way: its stone breaks to nothing, bare hand or pickaxe
+  // (probe-quarry.js, 17:20 UTC, "equip ok, dig resolved, block to
+  // air, no drop").)
+  const have = agent.api.inventory_count('dirt');
   if (have < 1) {
-    const taken = await agent.api.take_from_depot(['cobblestone']);
-    if (taken && taken.ok) return { done: false, detail: `took ${taken.count} cobblestone from the depot` };
-    if (have < 1) {
-      // The world's surface stone is the ramp's own material: a step or
-      // two of quarrying pays for a step of stairs. The search is
-      // bounded above the mining floor — the nearest bare stone to the
-      // gully is a cave wall twenty blocks DOWN, and the workface's
-      // own depth rule refused every quarry the planner asked for
-      // (15:06–15:11 UTC, "too deep").
-      const stone = agent.api.find_block({
-        names: ['stone', 'cobblestone'],
-        max_distance: 24,
-        min_y: 49,
-        any_level: true,
-      });
-      if (stone) {
-        const dug = await agent.api.dig(stone.x, stone.y, stone.z);
-        await agent.api.pickup_near(stone.x, stone.z, 4);
-        return {
-          done: false,
-          result: dug.ok ? 'win' : undefined,
-          detail: dug.ok ? 'quarried a stone for the steps' : `the quarry failed: ${dug.detail}`,
-        };
-      }
-      const where = agent.position();
-      await standNear(agent, project.site.x, project.site.y, project.site.z);
+    const dirt = agent.api.find_block({
+      names: ['dirt', 'coarse_dirt', 'rooted_dirt', 'grass_block'],
+      max_distance: 16,
+    });
+    if (dirt) {
+      const dugDirt = await agent.api.dig(dirt.x, dirt.y, dirt.z);
       return {
         done: false,
-        detail:
-          `waiting at the site for cobblestone ` +
-          `(no stone within 24 above y49 from ${where ? `${where.x},${where.y},${where.z}` : 'nowhere'})`,
+        result: dugDirt.ok ? 'win' : undefined,
+        detail: dugDirt.ok ? 'dug a dirt for the step' : `the dirt dig failed: ${dugDirt.detail}`,
       };
     }
+    await standNear(agent, project.site.x, project.site.y, project.site.z);
+    return { done: false, detail: 'waiting at the site for dirt (the gully itself is dirt)' };
   }
   // The lowest missing step first: the staircase is built from the
   // floor up, and every finished step is the footing for the next.
@@ -428,11 +416,12 @@ async function buildRamp(agent, project) {
   await standNear(agent, block.x, block.y, block.z);
   // Carve the column down to the step: everything solid above the
   // step's own y (and a natural block sitting at the step's y, which
-  // the cobblestone replaces) goes, a few blocks per step.
+  // the dirt replaces) goes, a few blocks per step. The carving is by
+  // hand and honest about what it cannot break.
   let dug = 0;
   for (let y = block.y + 6; y >= block.y && dug < 8; y--) {
     const there = agent.api.block_at(block.x, y, block.z);
-    if (!there || there === 'air' || there === 'cobblestone') continue;
+    if (!there || there === 'air') continue; // only air is left standing
     // The depot's own surfaces are never carved, whatever a plan says:
     // the first live ramp plan held the chest's own column as a step
     // (b058, denied by the validator; this is the belt to those
@@ -444,7 +433,7 @@ async function buildRamp(agent, project) {
     if (!out.ok) return { done: false, detail: `could not carve the step: ${out.detail}` };
     dug += 1;
   }
-  const placed = await projectPlace(agent, project, 'cobblestone', block.x, block.y, block.z);
+  const placed = await projectPlace(agent, project, 'dirt', block.x, block.y, block.z);
   if (placed.ok) {
     return {
       done: !missingBlocks(agent, project).length,

@@ -193,9 +193,14 @@ function buildProposal(kind, world, extras = {}) {
     const plan = world.rampSteps(from.x, from.y, from.z, to.x, to.z);
     if (!plan || !plan.length) return null;
     // Each step is a cell carved down to its target top; the scope
-    // names the cobblestone that finishes it, so the walk out of the
-    // gully is one material and one bookkeeping (missingBlocks).
-    const blocks = plan.map((s) => ({ name: 'cobblestone', x: s.x, y: s.top, z: s.z }));
+    // names the dirt that finishes it. Dirt, not cobblestone: this
+    // world's stone breaks to a bare nothing even under a pickaxe
+    // (probe-quarry.js, 17:20 UTC — equip ok, dig resolved, block to
+    // air, no drop entity, no item), while dirt drops to any hand,
+    // and the carve itself is dirt — the steps pay for themselves out
+    // of the ground they are cut into. The bill is empty for the same
+    // reason: no raw the gatherer must carry.
+    const blocks = plan.map((s) => ({ name: 'dirt', x: s.x, y: s.top, z: s.z }));
     // The site hugs the plan: a radius ten times wider than the work
     // drew the departed visitor's rim blocks into the first
     // proposal's site and the validator denied it (b058).
@@ -209,7 +214,7 @@ function buildProposal(kind, world, extras = {}) {
       need: 'the floor the crew stands on is a pit; the walks that carry goods die at its rim',
       site: { x: mid.x, y: mid.y, z: mid.z, r: Math.max(4, Math.ceil(spread)) },
       scope: { blocks },
-      materials: { cobblestone: blocks.length },
+      materials: {},
       owner: 'builder',
     };
   }
