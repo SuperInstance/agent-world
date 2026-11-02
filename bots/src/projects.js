@@ -240,8 +240,15 @@ async function growFarm(agent, project) {
   // The materials: a hoe (2 planks + 2 sticks, so 4 planks and some
   // sticks), and seeds (from the grass). The bill names logs, not a
   // hoe: the gatherer carries logs and the owner crafts (2026-11-02).
+  // A hoe in the hand needs 2 planks AND 2 sticks — holding both and
+  // demanding 4 planks anyway walked back to "waiting for wood" with
+  // a craftable hoe in the bag (2026-11-02 21:05Z, one given log:
+  // 4 planks, 2 to sticks, then 2 left + 2 sticks = a hoe that never
+  // happened).
   if (agent.api.inventory_count('wooden_hoe') < 1 && farmland.length) {
-    if (agent.api.inventory_count('oak_planks') < 4) {
+    const hoeReady = agent.api.inventory_count('oak_planks') >= 2
+      && agent.api.inventory_count('stick') >= 2;
+    if (!hoeReady && agent.api.inventory_count('oak_planks') < 4) {
       const logs = agent.bot.inventory.items().filter((i) => i.name.endsWith('_log'));
       if (logs.length) {
         await agent.api.craft('oak_planks', 4);
@@ -286,7 +293,7 @@ async function growFarm(agent, project) {
     }
     // A hoe is 2 planks and 2 sticks: the craft fails without the
     // sticks, so they are split out of a plank first.
-    if (agent.api.inventory_count('stick') < 2) {
+    if (!hoeReady && agent.api.inventory_count('stick') < 2) {
       const crafted = await agent.api.craft('stick', 2);
       if (!crafted.ok) return { done: false, detail: `no sticks for the hoe: ${crafted.detail}` };
       return { done: false, detail: 'split planks for the sticks' };
