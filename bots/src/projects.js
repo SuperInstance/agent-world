@@ -433,12 +433,18 @@ async function buildRamp(agent, project) {
     if (!out.ok) return { done: false, detail: `could not carve the step: ${out.detail}` };
     dug += 1;
   }
+  // A step is a floor cell: the builder digs it standing beside it
+  // and must step AWAY to place it — a block into one's own body is
+  // refused by the server ("still air", 17:53, four times over;
+  // the walls of old never met this because a wall is placed from
+  // outside itself).
+  const aside = await agent.api.move_to(block.x + 2, block.y + 1, block.z, 1);
   const placed = await projectPlace(agent, project, 'dirt', block.x, block.y, block.z);
   if (placed.ok) {
     return {
       done: !missingBlocks(agent, project).length,
       detail: dug
-        ? `carved ${dug} and placed a step (${project.placed || 0} of ${project.scope.blocks.length})`
+        ? `carved ${dug} and placed a step (${project.placed || 0} of ${project.scope.blocks.length})${aside.ok ? '' : ' (placed from where the builder stood)'}`
         : `placed a step (${project.placed || 0} of ${project.scope.blocks.length})`,
     };
   }

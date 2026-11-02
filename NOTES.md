@@ -528,3 +528,17 @@ re-run.
   carves real terrain until its stall clock abandons it (~19:00Z);
   the next proposal recomputes on the carved ground and builds the
   dirt steps on it.
+
+- 18:05:46 — **b064 done**: the tester walked the dirt steps and
+  passed them. Proposal to done in 24 minutes. The board: done 2
+  (chest, ramp), active 1 (farm — waiting on wood for a hoe; a death
+  in the pit cost the old one, inventories do not survive a
+  respawn). The council's need line still names "ramp" — the planner
+  measures the straight line from the pit past the visitor keep-out —
+  but the board's own memory (a done ramp stays on it) keeps the
+  proposal suppressed; the walk itself exists via the pit floor to
+  the steps, which is what the tester's pass certified. TPS 20.0 in
+  every sample of the day; MemAvailable min 34.4; grief 0; the day's
+  doc section is docs/playtest-community-2026-11-02.md §6. The seat
+  closes with the world running unattended: paper, bots, reflex, d1,
+  drift-watch, community-watch, viewer — the same seven as day one.
