@@ -308,7 +308,7 @@ class ReflexService:
                     f"drift pause ({world_pause.get('level', 'tier')}): "
                     f"{world_pause.get('reason', '')}"
                 )
-            self._yielded += 1
+            self._yielded += len(batch)
             self._record_yield([item.bot for item in batch], reason)
             for item in batch:
                 item.error = f"yielded: {reason}"
@@ -327,6 +327,7 @@ class ReflexService:
             # The soft level of §3.5: this agent waits on its own
             # branch and stops committing; the rest of the pack is
             # answered. A held bot is a yield, not a failure.
+            self._yielded += len(held)
             self._record_yield(
                 [item.bot for item in held],
                 f"drift pause (soft): held by the drift detector",

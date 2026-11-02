@@ -11,7 +11,13 @@ window. It is ``tools/drift/enforce.py`` (builder-ide build #3,
 * **dry-run is off only for soft holds**: a ``soft`` entry (one agent
   waits on its own branch) is written; ``tier`` and ``hard`` are
   logged as dry-run lines and a human decides them — an automated
-  standing-aside of the whole world is not this seat's call to make.
+  standing-aside of the whole world is not this seat's call to make;
+* **a soft hold is not renewed while the agent's silence is
+  explained**: the fold excuses the idle of a window the agent spent
+  standing aside (a ``drift.yield`` inside it), and an excused window
+  leaves the stall signal *undefined* — which a gate holds rather than
+  clears. Without this step the hold renewed itself forever, because
+  the hold is what made the silence (2026-11-02, 07:43–09:08 UTC).
 
 Everything else is the shipped detector: the tuned-from-calibration
 config, the state (not the fires) at the last window, the ladder's
@@ -93,6 +99,21 @@ def log(line: str) -> None:
         handle.write(f"{stamp} {line}\n")
 
 
+def standing_aside(series, actor: str) -> bool:
+    """Is the actor's silence in the latest window **explained**?
+
+    The fold sets an agent bucket's ``idle_seconds`` to None when a
+    ``drift.yield`` falls inside the window: the agent tried, and the
+    world said "not now". That is the difference between "could not
+    act" and "chose not to act", and it is the same rule the stall
+    signal is folded with (core/drift/ledger.py, build_series).
+    """
+    if not series.buckets:
+        return False
+    entry = series.buckets[-1].agents.get(actor)
+    return entry is not None and entry.idle_seconds is None
+
+
 def one_window(now: float | None = None) -> int:
     clock = now if now is not None else time.time()
     series = build_series(str(LEDGER))
@@ -116,6 +137,33 @@ def one_window(now: float | None = None) -> int:
         return 0
     soft = {actor: entry for actor, entry in plan.entries.items() if entry.level == SOFT}
     held = {a: e for a, e in plan.entries.items() if a not in soft}
+    # The world's narrowing, one step further: a soft hold is **not
+    # renewed** while the agent's silence in the window is explained.
+    #
+    # The detector's fold excuses the idle of a window the agent spent
+    # standing aside (a ``drift.yield`` inside it), which leaves the
+    # stall signal **undefined** — and an undefined signal does not
+    # clear a gate, it *holds* it ("no evidence: hold the state",
+    # core/drift/gate.py). So the alarm, once committed, stays committed
+    # for as long as the agent stands aside, and the hold causes the
+    # silence that excuses the silence that causes the hold: the first
+    # live hold renewed itself every five minutes for an hour and a
+    # half (2026-11-02, 07:43–09:08 UTC, "drift signal stall+success")
+    # and the held gatherer starved the crew.
+    #
+    # So the world enforces a soft hold for its TTL and then lets the
+    # agent try again: a hold whose window is explained is left to
+    # lapse, not renewed. If the agent is still silent afterwards, the
+    # silence is unexplained again, the signal is defined again, and
+    # the hold is enforced again — which is the supervision loop the
+    # detector is for.
+    explained = {actor for actor in soft if standing_aside(series, actor)}
+    soft = {actor: entry for actor, entry in soft.items() if actor not in explained}
+    for actor in sorted(explained):
+        log(
+            f"soft hold not renewed: {actor} — its silence in this window is "
+            f"explained (a drift.yield stands inside it); the hold lapses at its TTL"
+        )
     if soft:
         pause = PauseFile(PAUSE_FILE)
         pause.merge(soft, now=clock)
