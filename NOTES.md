@@ -668,3 +668,8 @@ re-run.
   Projects done per hour today: 0 — the day bought nine fixes with
   their numbers, and named the two blockers. The seven processes run
   on: paper, reflex, bots, viewer, d1, drift-watch, community-watch.
+- 22:15 — d1 had exited at some point in the evening (its tmux window
+  gone; the reflex ran on its local bandit all night — the crew kept
+  deciding, which is the design's own fallback proving itself);
+  restarted via ops/d1.sh, port 8094, health ok. The seven run again:
+  paper, reflex, bots, viewer, d1, drift-watch, community-watch.
