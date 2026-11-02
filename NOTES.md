@@ -542,3 +542,41 @@ re-run.
   doc section is docs/playtest-community-2026-11-02.md §6. The seat
   closes with the world running unattended: paper, bots, reflex, d1,
   drift-watch, community-watch, viewer — the same seven as day one.
+
+## Day three (2026-11-02, the 09:26 seat)
+
+- 09:26 — the seat opens on the day-3 CONTINUE (stone drops, safe-keeping,
+  the wheat cycle, the council's next projects). The seven detached
+  processes all alive; TPS 20.0; 45 GB available, load 14.
+- 09:29:46 — **the seat's own fault first**: I sent a Tab to the server
+  console trying to tab-complete `gamerule `, and the completion's
+  SuggestCommand component contained a literal tab — a disallowed chat
+  character — and the serializer exception crashed the tick loop
+  (crash-2026-11-02_09.29.46-server.txt; "Failed to encode Minecraft
+  Component: ... Disallowed chat character: '\t'"). The server saved all
+  chunks on the way down; restarted at 09:31:24 (Done 14.5s, joins work).
+  Rule for every seat after this one: **the tmux console is a terminal —
+  never send Tab; type plain queries only** (plain `gamerule
+  minecraft:block_drops` is safe and answered in the log).
+- 09:31 — after the restart Kite and Sprout rejoined but Pebble and Timber
+  did not: Paper throttled their same-IP reconnects at 18:31:25Z
+  ("Connection throttled!"), and the kick-during-login hung their
+  reconnect loops forever — `connect()` only settled on 'spawn'/'error',
+  so a login that ends with 'kicked'+'end' never settles the promise the
+  loop is awaiting. Fixed in bots/src/agent.js (first of spawn/error/end
+  settles it); ops/bots.sh restart brought all four back staggered
+  (18:37:22–18:37:41Z). Also noted, not yet acted on: floodgate fails to
+  enable on every boot (guice error, then "Disabling floodgate") and its
+  dead netty injector throws "zip file closed" into the log on every
+  join — Java joins are unaffected; the signed-in Bedrock door is
+  untested today.
+- 09:34:57 — the stone question, first instrument: NOT config.
+  `minecraft:block_drops` (the rule's 26.1 name; doTileDrops is gone and
+  level.dat no longer holds GameRules — they live per-dimension in
+  world/dimensions/minecraft/overworld/data/minecraft/game_rules.dat) is
+  **true**; plugins are Geyser/ViaVersion/floodgate (none touch drops);
+  Pebble's playerGameType is 0. And `loot give Kite mine 0 20 0 air`
+  **dropped 1 cobblestone** from minecraft:blocks/stone (Kite even made
+  the Stone Age advancement) — the loot table itself yields without a
+  tool. So the dig path, not the table, loses the drop. Next: inspect
+  the pickaxe's components in a live inventory.

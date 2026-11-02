@@ -95,6 +95,18 @@ class Agent {
         checkTimeoutInterval: 60000,
       });
 
+      // A kick during login (Paper throttles same-IP reconnects after a
+      // crash) closes the socket with 'end' and no 'error' — an
+      // unsettled promise here hangs reconnect()'s await forever, and a
+      // throttled builder never comes back (Pebble and Timber, 2026-11-02
+      // 18:31Z). Only the first of spawn/error/end settles it.
+      let settled = false;
+      const settle = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        fn(arg);
+      };
+
       this.bot.once('spawn', () => {
         givePathfinding(this.bot, this.guard);
         this.api = buildApi(this.bot, this.counters, this.guard || undefined);
@@ -103,12 +115,12 @@ class Agent {
         this.watchTheBlocks();
         this.log.note({ bot: this.name, event: 'spawn', position: this.position() });
         if (this.onSpawn) this.onSpawn(this);
-        resolve(this);
+        settle(resolve, this);
       });
 
       this.bot.once('error', (err) => {
         this.log.note({ bot: this.name, event: 'error', detail: String(err.message || err) });
-        reject(err);
+        settle(reject, err);
       });
 
       this.bot.on('kicked', (reason) => {
@@ -117,6 +129,7 @@ class Agent {
 
       this.bot.on('end', (reason) => {
         this.log.note({ bot: this.name, event: 'end', detail: String(reason) });
+        settle(reject, new Error(`ended before spawn: ${String(reason)}`));
         // The world restarts, the network wobbles, the whitelist is
         // applied a second late: a builder that gives up is a builder
         // that never comes back. So it comes back.
