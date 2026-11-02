@@ -139,7 +139,14 @@ function buildProposal(kind, world, extras = {}) {
       // block above it: a floating chest has nothing to build against,
       // and the raw material is logs — the builder crafts the chest.
       scope: { blocks: [{ name: 'chest', x: spot.x, y: spot.y, z: spot.z }] },
-      materials: { oak_log: 2 },
+      // A chest is a 3x3 craft: the bill counts the bench too when the
+      // site has none within crafting reach (the depot's bench serves
+      // every site near it; a bill that re-counted it would
+      // over-charge the world's wood).
+      materials: rawBill({
+        chest: 1,
+        ...(world.benchNear(spot.x, spot.y, spot.z) ? {} : { crafting_table: 1 }),
+      }),
       owner: 'builder',
     };
   }
@@ -169,9 +176,46 @@ function buildProposal(kind, world, extras = {}) {
       },
       materials: rawBill({
         wooden_hoe: 1,
+        // The hoe is a 3x3 craft: no bench within reach of the plot,
+        // and the bill owes the wood for one (day one the farm billed
+        // the hoe's log alone and the bench came out of nobody's
+        // bill — "the farm bill under-counts the bench").
+        ...(world.benchNear(plot.x, plot.y, plot.z) ? {} : { crafting_table: 1 }),
         wheat_seeds: plot.blocks.filter((b) => b.name === 'wheat').length,
       }),
       owner: 'farmer',
+    };
+  }
+  if (kind === 'ramp') {
+    const from = extras.from;
+    const to = extras.to;
+    if (!from || !to) return null;
+    const plan = world.rampSteps(from.x, from.y, from.z, to.x, to.z);
+    if (!plan || !plan.length) return null;
+    // Each step is a cell carved down to its target top; the scope
+    // names the dirt that finishes it. Dirt, not cobblestone: this
+    // world's stone breaks to a bare nothing even under a pickaxe
+    // (probe-quarry.js, 17:20 UTC — equip ok, dig resolved, block to
+    // air, no drop entity, no item), while dirt drops to any hand,
+    // and the carve itself is dirt — the steps pay for themselves out
+    // of the ground they are cut into. The bill is empty for the same
+    // reason: no raw the gatherer must carry.
+    const blocks = plan.map((s) => ({ name: 'dirt', x: s.x, y: s.top, z: s.z }));
+    // The site hugs the plan: a radius ten times wider than the work
+    // drew the departed visitor's rim blocks into the first
+    // proposal's site and the validator denied it (b058).
+    const mid = blocks[Math.floor(blocks.length / 2)];
+    const spread = Math.max(
+      ...blocks.map((b) => Math.hypot(b.x - mid.x, b.z - mid.z))
+    );
+    return {
+      kind,
+      title: 'steps out of the depot gully',
+      need: 'the floor the crew stands on is a pit; the walks that carry goods die at its rim',
+      site: { x: mid.x, y: mid.y, z: mid.z, r: Math.max(4, Math.ceil(spread)) },
+      scope: { blocks },
+      materials: {},
+      owner: 'builder',
     };
   }
   if (kind === 'path') {
@@ -246,6 +290,24 @@ function needs(board, world) {
   if (!world.chestAt(depot.x, depot.y, depot.z, 12)) {
     const p = buildProposal('depot-chest', world);
     if (p) out.push(p);
+  }
+  // 2.5 — steps out of the depot gully. The spawn pocket the crew
+  // stands in is rimmed by the old wall, four to six below the
+  // standing ground by the chest; the walks that carry the world's
+  // goods die at the rim (day one: every restart landed the crew at
+  // the floor, six placement timeouts from it, deliveries tossed
+  // wherever the walk died). The steps are computed from the ground
+  // itself where the crew actually stands, and the board carries the
+  // memory: a ramp once done is not proposed again.
+  const chestSite = board
+    .list()
+    .find((p) => p.kind === 'depot-chest' && p.status === 'done');
+  if (chestSite && chestSite.site) {
+    const floor = world.lowestStand();
+    if (floor) {
+      const p = buildProposal('ramp', world, { from: floor, to: chestSite.site });
+      if (p) out.push(p);
+    }
   }
   // 3 — the forest. Trunks within 64 of the depot; fewer than eight
   // and the forest the chopping took is still owed.

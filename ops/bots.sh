@@ -109,9 +109,30 @@ cmd_start() {
 }
 
 cmd_stop() {
+    # kill-window is a SIGHUP: the builders die mid-word and the server
+    # logs four mystery "Disconnected" lines — day one's "Pebble's
+    # disconnects at delivery moments" were exactly this, one per
+    # operator restart, all four sockets closing the same second
+    # (paper.log 03:13:20, 03:23:31, 03:30:04, 03:42:09, 04:00:03,
+    # 04:26:41 local). SIGTERM walks the graceful path first —
+    # bot.quit("the world is resting"), the log stream closed — and
+    # the window comes down only after the leaf has had its seconds.
     for window in "$BOTS_WINDOW" "$REFLEX_WINDOW"; do
         if window_exists "$window"; then
             say "ending the '$window' window"
+            local pane children waited
+            pane="$(tmux display-message -p -t "$SESSION:$window" '#{pane_pid}' 2>/dev/null || true)"
+            if [ -n "$pane" ]; then
+                children="$(pgrep -P "$pane" 2>/dev/null || true)"
+                if [ -n "$children" ]; then
+                    kill -TERM $children 2>/dev/null || true
+                    waited=0
+                    while [ "$waited" -lt 8 ] && pgrep -P "$pane" >/dev/null 2>&1; do
+                        sleep 1
+                        waited=$((waited + 1))
+                    done
+                fi
+            fi
             tmux kill-window -t "$SESSION:$window" 2>/dev/null || true
         fi
     done

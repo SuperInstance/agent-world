@@ -45,7 +45,7 @@ const RULES = {
   'kind:known': {
     text: 'the community has a builder for this kind of project',
     check: (p) =>
-      ['depot-chest', 'replant', 'farm', 'path', 'shelter', 'fix'].includes(p.kind)
+      ['depot-chest', 'replant', 'farm', 'path', 'shelter', 'fix', 'ramp'].includes(p.kind)
         ? null
         : 'deny',
   },
@@ -127,7 +127,7 @@ function proposalKeys(proposal) {
   const keys = [];
   if (proposal.kind) {
     keys.push(
-      ['depot-chest', 'replant', 'farm', 'path', 'shelter', 'fix'].includes(proposal.kind)
+      ['depot-chest', 'replant', 'farm', 'path', 'shelter', 'fix', 'ramp'].includes(proposal.kind)
         ? 'kind:known'
         : 'kind:unknown'
     );
