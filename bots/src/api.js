@@ -217,6 +217,19 @@ function attemptWalk(bot, x, y, z, distance, deadline) {
         finish('arrived');
         return;
       }
+      // A dig under way is progress. The planner digs through a wall on
+      // its way (that is what canDigBlocks is for), and a dig takes
+      // seconds in which the feet do not move: the stall watcher read
+      // that as wedged, nudged the dig away, and the next attempt began
+      // the same dig to be nudged again — a gatherer in the depot gully
+      // could not start a single walk (2026-11-02, probe-wedge: standing
+      // free on stone, five walks, five "could not start", every path
+      // beginning with a wall). The walk's own deadline still bounds it.
+      if (bot.targetDigBlock) {
+        checkpoint = bot.entity.position.clone();
+        rearm();
+        return;
+      }
       if (bot.entity.position.distanceTo(checkpoint) >= STALL_PROGRESS) {
         checkpoint = bot.entity.position.clone();
         rearm();
@@ -291,13 +304,19 @@ async function gotoNear(bot, x, y, z, distance = 2, timeout = 20000) {
         if (!STOP_RACE.test(message)) throw new Error(message);
         outcome = 'stalled';
       }
-      // A stall buys one nudge; the third stall ends the walk, and the
-      // whole budget ending it does too.
+      // A stall buys one nudge. A stall is not always a wedge: on the
+      // depot gully's rim the follower reports moving and mines nothing
+      // while the feet do not advance a block — a step-up it cannot
+      // time — and the nudge's back-off-and-jump is what realigns it
+      // (probe-follow, 2026-11-02: stuck twice at the same 1-up step,
+      // freed on the second nudge, arrived in 13.2 s). Three stalls
+      // were not enough for the crew on that same ground, so a walk
+      // now carries five nudges; the whole budget still ends it.
       if (outcome === 'timeout') {
         reason = 'the walk took too long';
         break;
       }
-      if (++nudges > 2) {
+      if (++nudges > 5) {
         reason = 'the walk could not start';
         break;
       }
@@ -767,13 +786,37 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
         return { ok: false, detail: String((err && err.message) || err) };
       }
     },
-    move_to: async (x, y, z) => {
+    move_to: async (x, y, z, distance) => {
       try {
-        await gotoNear(bot, x, y, z, 2);
+        await gotoNear(bot, x, y, z, distance || 2);
         return { ok: true, detail: `walked to ${x}, ${y}, ${z}` };
       } catch (err) {
         return { ok: false, detail: String((err && err.message) || err) };
       }
+    },
+    /** Walk over the item drops lying near a point, so the server's
+     *  pickup hands them to the bot. A delivery is a toss: the item
+     *  lands where it skids, two blocks from the owner who waited for
+     *  it, and nobody's inventory changes while both stand there
+     *  (2026-11-02: b037 staged two logs for eleven minutes before
+     *  this existed). Returns how many drops were walked over. */
+    pickup_near: async (x, z, radius) => {
+      const drops = Object.values(bot.entities).filter((e) => {
+        if (!e || !e.position) return false;
+        if (e.name !== 'item' && e.name !== 'Item' && e.name !== 'item_stack') return false;
+        return Math.hypot(e.position.x - x, e.position.z - z) <= (radius || 6);
+      });
+      let walked = 0;
+      for (const d of drops.slice(0, 4)) {
+        try {
+          await gotoNear(bot, d.position.x, d.position.y, d.position.z, 0, 8000);
+        } catch (err) {
+          continue; // this one is out of reach; the next may not be
+        }
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        walked += 1;
+      }
+      return walked;
     },
     equip: async (name) => {
       const item = bot.inventory.items().find((i) => i.name === name);
@@ -906,8 +949,13 @@ async function collectAt(bot, position) {
     try {
       await gotoNear(bot, position.x, position.y, position.z, 1);
     } catch (err) {
-      // Could not walk there: the item stays on the ground.
-      return false;
+      // The block's own cell cannot be stood beside — a trunk up a
+      // face, a log on a ledge — but the DROP is not the block: it
+      // falls to the ground below, where the feet can go. Chase the
+      // entity, not the cell (2026-11-02: four spruce logs mined on
+      // the terrace, "mined spruce_log" without "and collected it",
+      // the bag empty, while the drops lay on the walkable ground).
+      break;
     }
     // The server hands the item over when the bot is close enough; it
     // takes a moment, so the wait is generous.

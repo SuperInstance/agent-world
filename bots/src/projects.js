@@ -91,6 +91,10 @@ async function buildDepotChest(agent, project) {
       }
       const staged = await agent.api.take_from_depot(['oak_log']);
       if (staged && staged.ok) return { done: false, detail: `took ${staged.count} log(s) from the depot` };
+      // A delivery is a toss, and a tossed item skids: the wood may be
+      // lying at the site itself, two blocks from the one it was for.
+      const picked = await agent.api.pickup_near(project.site.x, project.site.z, 6);
+      if (picked) return { done: false, detail: `picked up ${picked} delivered item(s) at the site` };
       await standNear(agent, block.x, block.y, block.z);
       return { done: false, detail: 'waiting at the site for wood' };
     }
@@ -164,6 +168,10 @@ async function growFarm(agent, project) {
       }
       const staged = await agent.api.take_from_depot(['oak_log']);
       if (staged && staged.ok) return { done: false, detail: 'took a log for the hoe' };
+      // A delivery is a toss, and a tossed item skids: the wood may be
+      // lying at the site itself, two blocks from the one it was for.
+      const pickedHoe = await agent.api.pickup_near(project.site.x, project.site.z, 6);
+      if (pickedHoe) return { done: false, detail: `picked up ${pickedHoe} delivered item(s) for the hoe` };
       await standNear(agent, project.site.x, project.site.y, project.site.z);
       return { done: false, detail: 'waiting at the site for wood (the hoe)' };
     }
@@ -324,6 +332,12 @@ function supplyTarget(board) {
 }
 
 /** One step of supplying: fetch what a project wants, carry it to the site. */
+/** Refusals the hunt has already learned, this process's lifetime:
+ *  "x,y,z" -> when it was refused. A candidate that was protected or
+ *  unwalkable ten minutes ago may be tried again; one refused a moment
+ *  ago is not re-bought at the price of a walk. */
+const HUNT_MEMORY = new Map();
+
 async function supplyStep(agent, board) {
   const target = supplyTarget(board);
   if (!target) return null; // nothing to supply: the tick falls through
@@ -344,8 +358,14 @@ async function supplyStep(agent, board) {
   );
 
   if (inHand >= want.count) {
-    // Carry them to the site and let them go: the owner stands there.
-    await standNear(agent, project.site.x, project.site.y, project.site.z);
+    // Carry them to the site and let them go: the owner stands there —
+    // CLOSE. A toss from three blocks skids out of every pickup radius
+    // and despawns five minutes later, and the board keeps saying
+    // "staged" for wood the world no longer holds (2026-11-02, b037:
+    // two logs staged at 11:26, gone by 11:31, Timber waiting still).
+    // The walk is best effort: the toss happens from wherever the feet
+    // managed to get.
+    await agent.api.move_to(project.site.x, project.site.y, project.site.z, 1).catch(() => {});
     const item = agent.bot.inventory.items().find((i) => familyOf(want.name).includes(i.name));
     if (!item) return { done: false, detail: `the ${want.name} left the bag` };
     try {
@@ -357,7 +377,7 @@ async function supplyStep(agent, board) {
     staged[want.name] = (staged[want.name] || 0) + delivered;
     board.stagedMaterials(project.id, staged);
     agent.say(`${delivered} ${want.name.replace(/_/g, ' ')} for ${project.title}`);
-    return { done: false, detail: `delivered ${delivered} ${want.name} to ${project.id}` };
+    return { done: false, result: 'win', detail: `delivered ${delivered} ${want.name} to ${project.id}` };
   }
 
   // Fetch. The gather is direct — into the bag, not through the
@@ -373,7 +393,7 @@ async function supplyStep(agent, board) {
     // pile of logs to chop new ones is not a supply chain.
     const taken = await agent.api.take_from_depot(['oak_log', 'spruce_log', 'birch_log']);
     if (taken && taken.ok) {
-      return { done: false, detail: `took ${taken.count} ${taken.name} from the depot` };
+      return { done: false, result: 'win', detail: `took ${taken.count} ${taken.name} from the depot` };
     }
     const home = agent.api.depot();
     const near = agent.position();
@@ -409,7 +429,31 @@ async function supplyStep(agent, board) {
     //   is free.
     const feet = agent.position() || { y: 70 };
     const tried = [];
-    for (let look = 0; look < 5; look++) {
+    // The refusals, said: "protected or unreachable" starved the crew
+    // for an hour on 2026-11-02 without a word about which tree or
+    // why — the log of record now carries the candidate and its
+    // refusal (the guard's why, or the walk's own words).
+    const why = [];
+    // ...and the refusals are REMEMBERED. The five nearest candidates
+    // to a gatherer in the depot gully are three keep-out refusals and
+    // two walk failures, and `tried` reset every step — so every step
+    // bought the same five refusals and never reached the sixth
+    // candidate, the nearest log actually allowed (2026-11-02, the
+    // 11:10 hunts: (2,64,0) protected, (9,62,0) walk, (6,68,5)
+    // protected, (5,68,10) walk, (3,67,0) protected — the allowed
+    // (0,68,2) never tried). A refusal cools ten minutes; a walk
+    // budget (five walks) is spent only on walks — a refusal is free
+    // to learn, as it always should have been.
+    const now = Date.now();
+    for (const [key, row] of HUNT_MEMORY) {
+      if (now - row.at > 10 * 60 * 1000) HUNT_MEMORY.delete(key);
+    }
+    const refused = (key, reason) => {
+      why.push(reason);
+      HUNT_MEMORY.set(key, { at: now });
+    };
+    let walks = 0;
+    for (let seen = 0; seen < 24 && walks < 5; seen += 1) {
       const log = agent.api.find_block({
         names,
         max_distance: 96,
@@ -417,26 +461,55 @@ async function supplyStep(agent, board) {
         max_y: Math.round(feet.y) + 12,
         exclude: tried,
       });
-      if (!log) return { done: false, detail: 'no tree within reach of the depot' };
+      if (!log) {
+        return {
+          done: false,
+          detail: why.length
+            ? `no tree left to try: ${why.slice(0, 5).join(' | ')}`
+            : 'no tree within reach of the depot',
+        };
+      }
       tried.push(`${log.x},${log.y},${log.z}`);
+      const key = `${log.x},${log.y},${log.z}`;
+      if (HUNT_MEMORY.has(key)) continue; // a refusal that has not cooled
       // The keep-out, checked before the feet move: a neighbour's
       // block is never mined, and the refusal costs nothing to learn.
       const mayDig = agent.guard && agent.guard.mayDig
         ? agent.guard.mayDig({ x: log.x, y: log.y, z: log.z })
         : { ok: true };
-      if (!mayDig.ok) continue;
-      const walked = await agent.api.move_to(log.x, log.y, log.z);
-      if (!walked.ok) continue; // unreachable: the next tree, not the same refusal
+      if (!mayDig.ok) {
+        refused(key, `(${log.x},${log.y},${log.z}) ${mayDig.why}`);
+        continue;
+      }
+      // The walk aims at DIG RANGE (three blocks), not adjacency: a
+      // log embedded in a gully wall has no standable cell within two,
+      // and the planner's search for one explodes instead of concluding
+      // (2026-11-02: path[0] empty for 14 s, every walk "could not
+      // start", while the gully floor stood open). Standing three from
+      // the trunk is what a lumberjack actually needs.
+      walks += 1;
+      const walked = await agent.api.move_to(log.x, log.y, log.z, 3);
+      if (!walked.ok) { // unreachable: the next tree, not the same refusal
+        refused(key, `(${log.x},${log.y},${log.z}) walk: ${walked.detail}`);
+        continue;
+      }
       const dug = await agent.api.dig(log.x, log.y, log.z);
-      if (dug.ok) return { done: false, detail: dug.detail };
+      if (dug.ok) {
+        HUNT_MEMORY.delete(key);
+        return { done: false, result: 'win', detail: dug.detail };
+      }
       if (!dug.detail.includes('not mining')) return { done: false, detail: dug.detail };
+      refused(key, `(${log.x},${log.y},${log.z}) dig: ${dug.detail}`);
     }
-    return { done: false, detail: 'every tree within reach is protected or unreachable' };
+    return {
+      done: false,
+      detail: `every tree within reach is protected or unreachable: ${why.slice(0, 5).join(' | ')}`,
+    };
   }
   if (want.name === 'cobblestone') {
     const taken = await agent.api.take_from_depot(['cobblestone', 'stone', 'cobbled_deepslate']);
     if (taken && taken.ok) {
-      return { done: false, detail: `took ${taken.count} ${taken.name} from the depot` };
+      return { done: false, result: 'win', detail: `took ${taken.count} ${taken.name} from the depot` };
     }
     const home = agent.api.depot();
     const near = agent.position();
@@ -449,7 +522,7 @@ async function supplyStep(agent, board) {
       const stone = agent.api.find_block({ names, max_distance: 48, min_y: 50, exclude: tried });
       if (!stone) return { done: false, detail: 'no surface stone within reach of the depot' };
       const dug = await agent.api.dig(stone.x, stone.y, stone.z);
-      if (dug.ok) return { done: false, detail: dug.detail };
+      if (dug.ok) return { done: false, result: 'win', detail: dug.detail };
       tried.push(`${stone.x},${stone.y},${stone.z}`);
       if (!dug.detail.includes('not mining')) return { done: false, detail: dug.detail };
     }
@@ -463,7 +536,7 @@ async function supplyStep(agent, board) {
     });
     if (leaf) {
       const dug = await agent.api.dig(leaf.x, leaf.y, leaf.z);
-      return { done: false, detail: dug.detail };
+      return { done: false, result: dug.ok ? 'win' : undefined, detail: dug.detail };
     }
     return { done: false, detail: 'no leaves for saplings nearby' };
   }
@@ -471,7 +544,7 @@ async function supplyStep(agent, board) {
     const grass = agent.api.find_block({ names: ['tall_grass', 'grass'], max_distance: 24 });
     if (grass) {
       const dug = await agent.api.dig(grass.x, grass.y, grass.z);
-      return { done: false, detail: dug.detail };
+      return { done: false, result: dug.ok ? 'win' : undefined, detail: dug.detail };
     }
     return { done: false, detail: 'no tall grass for seeds nearby' };
   }

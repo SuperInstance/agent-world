@@ -971,6 +971,16 @@ class Agent {
     if (said && outcome.detail && !outcome.detail.includes(said)) {
       outcome.detail = `${outcome.detail} — ${said}`;
     }
+    // A duty may carry its own result too: a project step that mined,
+    // staged, or delivered material is a won play, whatever the sealed
+    // prediction's default says. The drift detector's success signal
+    // reads exactly these rows, and a crew whose every play scores
+    // 'partial' can never show its baseline a healthy rate (2026-11-02:
+    // the gatherer worked all morning while 20 projects sat at zero).
+    if (!failure && result && (result.result === 'win' || result.result === 'lose')) {
+      outcome.result = result.result;
+      outcome.score = result.result === 'win' ? 1 : 0;
+    }
     const wall = (Date.now() - started) / 1000;
 
     const record = {

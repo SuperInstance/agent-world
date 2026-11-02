@@ -114,6 +114,24 @@ def standing_aside(series, actor: str) -> bool:
     return entry is not None and entry.idle_seconds is None
 
 
+def played_in_window(series, actor: str) -> bool:
+    """Did the actor play in the latest window?
+
+    A hold's own silence feeds the trailing pool: the TTL (30 min) is
+    twice the stall signal's lookback (3 buckets = 15 min), so a lapsed
+    hold always re-trips the alarm it fed. Measured on 2026-11-02:
+    Pebble was re-held within one window of every lapse (09:49, 10:24)
+    — the 10:24 enforcement landed on a window where Pebble had played
+    24 partial supply steps and idled 0 s, punished for the silence the
+    09:49 hold itself had made. An agent that played this window is not
+    silent; the alarm it feeds is history, not evidence.
+    """
+    if not series.buckets:
+        return False
+    entry = series.buckets[-1].agents.get(actor)
+    return entry is not None and (entry.wins + entry.losses + entry.partials) > 0
+
+
 def one_window(now: float | None = None) -> int:
     clock = now if now is not None else time.time()
     series = build_series(str(LEDGER))
@@ -157,12 +175,17 @@ def one_window(now: float | None = None) -> int:
     # silence is unexplained again, the signal is defined again, and
     # the hold is enforced again — which is the supervision loop the
     # detector is for.
-    explained = {actor for actor in soft if standing_aside(series, actor)}
+    explained = {
+        actor
+        for actor in soft
+        if standing_aside(series, actor) or played_in_window(series, actor)
+    }
     soft = {actor: entry for actor, entry in soft.items() if actor not in explained}
     for actor in sorted(explained):
         log(
-            f"soft hold not renewed: {actor} — its silence in this window is "
-            f"explained (a drift.yield stands inside it); the hold lapses at its TTL"
+            f"soft hold not enforced: {actor} — this window it stands aside "
+            f"(a drift.yield) or played; the alarm it feeds is the hold's own "
+            f"silence, not new evidence, and the hold in force lapses at its TTL"
         )
     if soft:
         pause = PauseFile(PAUSE_FILE)
