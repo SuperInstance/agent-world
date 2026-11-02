@@ -413,7 +413,7 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
     return block || null;
   };
 
-  return {
+  const api = {
     // --- what the bot can see ------------------------------------------------
     position: () => {
       const p = bot.entity.position;
@@ -724,6 +724,26 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       if (!verdict.ok) {
         return { ok: false, detail: `not mining that: ${verdict.why}` };
       }
+      // Safe-keeping: what cannot regrow from the world never goes
+      // underground. A death below costs the whole inventory —
+      // inventories do not survive a respawn (Sprout's hoe, in the pit,
+      // 2026-11-02) — so the seeds and the hoe are banked at the depot
+      // chest before any deep dig, and the work that needs them takes
+      // them back out. keepInventory stays untouched: it changes the
+      // world for human players too, and that is Casey's call, not the
+      // workface's. The banking fails soft — a chest that will not open
+      // never stops the dig.
+      if (block.position.y < 58) {
+        for (const precious of ['wheat_seeds', 'wooden_hoe']) {
+          if (bot.inventory.items().some((i) => i.name === precious)) {
+            try {
+              await api.leave_at_depot(precious);
+            } catch (err) {
+              // The chest would not open; the dig goes on.
+            }
+          }
+        }
+      }
       try {
         await approach(bot, block.position);
         await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), true);
@@ -962,6 +982,7 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       }
     },
   };
+  return api;
 }
 
 /** Walk next to a block, if the bot is not close enough to work on it. */

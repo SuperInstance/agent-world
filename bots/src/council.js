@@ -332,8 +332,21 @@ function needs(board, world) {
     const p = buildProposal('path', world, { to: far });
     if (p) out.push(p);
   }
-  // 6 — the shelter, once the chest and the forest stand.
-  if (!done('shelter') && done('depot-chest') && done('replant')) {
+  // 6 — the shelter, once the chest and the forest stand. The forest
+  // is the WORLD's own trunk count, not a replant project's status: a
+  // replant proposal only exists when the forest is GONE, so gating on
+  // done('replant') meant the shelter waited on a project that could
+  // never run while the forest stood — the board ran dry the moment
+  // the farm finished (day three's CONTINUE: the council proposes the
+  // NEXT projects so it never does).
+  if (
+    !done('shelter') &&
+    done('depot-chest') &&
+    world.countBlocks(
+      ['oak_log', 'spruce_log', 'birch_log'],
+      depot.x, depot.y, depot.z, 64
+    ) >= DEFAULTS.forestLogsWanted
+  ) {
     const p = buildProposal('shelter', world);
     if (p) out.push(p);
   }

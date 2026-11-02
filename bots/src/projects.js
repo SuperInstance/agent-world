@@ -329,6 +329,69 @@ async function growFarm(agent, project) {
   return { done: false, detail: placed.ok ? 'planted seeds' : placed.detail };
 }
 
+/** The live wheat on a farm's own cells, ripe first. The scope's wheat
+ *  cells are the plot's address: whatever stands on them now is the
+ *  crop. Age 7 is ripe (the blockstate's own number); an unreadable age
+ *  counts as ripe so an old client never starves a finished plot. */
+function ripeWheatOn(agent, project) {
+  const cells = (project.scope && project.scope.blocks || [])
+    .filter((b) => b.name === 'wheat');
+  const out = [];
+  for (const cell of cells) {
+    const block = agent.bot.blockAt(
+      new (require('vec3').Vec3)(cell.x, cell.y, cell.z)
+    );
+    if (!block || block.name !== 'wheat') continue;
+    let props = null;
+    try { props = block.getProperties(); } catch (err) { props = null; }
+    const age = props && props.age !== undefined ? Number(props.age) : null;
+    if (age === null || age >= 7) out.push({ x: cell.x, y: cell.y, z: cell.z });
+  }
+  return out;
+}
+
+/** The wheat cycle: harvest the ripe, replant the same cell, bank the
+ *  surplus. A farm planted once and left is a farm that ripens once —
+ *  the cycle is what sustains it (day three's CONTINUE: "plant-harvest-
+ *  replant so the farm sustains itself"). One stem a step: the dig
+ *  collects its own drops (api.dig walks into the cell now), the seed
+ *  goes straight back into the ground it came from, and the plot never
+ *  has to be re-planned. The seed guard: no harvest when the hand holds
+ *  no seed and only one stem is ripe — a single 0-seed drop would end
+ *  the farm; two stems or one seed in hand keeps the cycle alive. */
+async function tendWheat(agent, project) {
+  const ripe = ripeWheatOn(agent, project);
+  const seeds = agent.api.inventory_count('wheat_seeds');
+  if (!ripe.length) return { done: false, detail: 'the wheat is still green' };
+  if (seeds < 1 && ripe.length < 2) {
+    return { done: false, detail: 'holding the last stem until seeds are in hand' };
+  }
+  const stem = ripe[0];
+  const dug = await agent.api.dig(stem.x, stem.y, stem.z);
+  if (!dug.ok) return { done: false, detail: `harvest: ${dug.detail}` };
+  const wheatNow = agent.api.inventory_count('wheat');
+  const seedsNow = agent.api.inventory_count('wheat_seeds');
+  // Replant before anything else: the vacated cell is farmland under a
+  // clear sky, and a seed in hand is a seed in the ground.
+  if (seedsNow >= 1) {
+    const planted = await agent.api.place('wheat_seeds', stem.x, stem.y, stem.z);
+    if (!planted.ok) {
+      return { done: false, detail: `harvested but could not replant: ${planted.detail}` };
+    }
+  }
+  // The surplus is the farm's product: wheat to the depot for people,
+  // and a seed bank beyond a sower's pocket.
+  const detail = [`harvested wheat (now ${wheatNow} wheat, ${seedsNow} seeds)`];
+  if (seedsNow > 12) {
+    await agent.api.leave_at_depot();
+    detail.push('banked the surplus seeds');
+  } else if (wheatNow >= 6) {
+    await agent.api.leave_at_depot();
+    detail.push('took the wheat to the depot');
+  }
+  return { done: false, result: 'win', detail: detail.join('; ') };
+}
+
 /** path / shelter: place the planned blocks; wait at the site for materials. */
 async function buildPlanned(agent, project) {
   const missing = missingBlocks(agent, project);
@@ -840,6 +903,33 @@ class ProjectService {
           predict: { kind: 'none' },
           body: () => supplyStep(agent, this.board) || { done: false, detail: 'nothing to supply' },
         };
+      }
+    }
+
+    // The farmer's standing work: when no project owns it, the wheat
+    // cycle does — a planted farm is harvested and replanted forever,
+    // which is the difference between a farm and a decoration.
+    if (agent.role === 'farmer') {
+      const farm = this.board.list().find(
+        (p) => p.kind === 'farm' && (p.status === 'active' || p.status === 'done')
+      );
+      if (farm && farm.scope && agent.bot && agent.bot.blockAt) {
+        let ripe = [];
+        try { ripe = ripeWheatOn(agent, farm); } catch (err) { ripe = []; }
+        if (ripe.length) {
+          return {
+            skill_id: 'project.tendfarm',
+            title: 'tend the wheat',
+            reason: 'farm:' + farm.id,
+            predict: { kind: 'none' },
+            body: async () => {
+              const result = await tendWheat(agent, farm);
+              // Tending never finishes a project: the cycle is the work.
+              if (result && result.done) return { done: false, detail: result.detail };
+              return result;
+            },
+          };
+        }
       }
     }
     return null;
