@@ -205,3 +205,31 @@ re-run.
   86 GB free). Everything since is staged locally. When it returns:
   run the final battery, the grief probe, ops/steady.sh 30, fill the
   playtest note's placeholders, commit.
+
+- 02:33 UTC: the power cut's real wound found and healed: the box died
+  between builder-ide's ledger INSERT(id='') and its UPDATE, leaving
+  one audit row with an empty id that every later insert of the
+  placeholder collided with ("UNIQUE constraint failed: audit.id" on
+  every play). One UPDATE healed it; the log of record (bots.jsonl)
+  refolded unchanged (41,357 plays). The reflex reloaded, the crew
+  rejoined on their own.
+- The follow, cracked: mineflayer-pathfinder's GoalFollow with the
+  work movements (dig on, parkour off) stalls a few blocks from a
+  moving target and never closes (FollowerM2: 13.9 → 8.0 forever);
+  with walking movements it closes to 1.3 (FollowerX). And even with
+  walking movements, a wedged bot computes paths ("success" every 4 s)
+  and never makes the first move — probe-follow, FollowerF2 at 11.6
+  blocks. Fixes: a follow now walks with its own movements (no
+  digging), and the follow duty watches its own progress and nudges
+  itself loose the way gotoNear always has.
+- "stop" is now visible: the crew holds still five seconds,
+  re-releasing the planner every tick, before taking up its own work.
+- gatherer.wood v12 seeded: four 36-block walks, searching after each,
+  before admitting there is no tree (the spawn forest is gone; v11
+  searched 96 blocks from where it stood and failed three times in one
+  battery — a gatherer must go where wood is).
+- The last battery (04:26 UTC): what-doing ok, addressed ok, stop ok
+  (ack 400 ms, they let go), follow and come ok when the crew is near,
+  failing honestly from 35+ blocks of rough ground; gather-wood running
+  v12 as this is written. The full table and every earlier run's
+  numbers are in docs/playtest-2026-11-02-playable.md.

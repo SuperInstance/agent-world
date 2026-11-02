@@ -202,6 +202,13 @@ async function nudge(bot) {
     await new Promise((resolve) => setTimeout(resolve, 400));
     bot.setControlState(control, false);
   }
+  // A step-up: half the wedges are a one-block lip the sidesteps never
+  // climb, and a jump plus a stride opens them.
+  bot.setControlState('jump', true);
+  bot.setControlState('forward', true);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  bot.setControlState('forward', false);
+  bot.setControlState('jump', false);
   await new Promise((resolve) => setTimeout(resolve, 250));
 }
 
@@ -806,4 +813,4 @@ function createSandbox(hostApi) {
   };
 }
 
-module.exports = { buildApi, createSandbox, givePathfinding, gotoNear, TICK_MS };
+module.exports = { buildApi, createSandbox, givePathfinding, gotoNear, nudge, TICK_MS };

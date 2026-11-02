@@ -79,6 +79,7 @@ class Agent {
     this.duty = null;
     this.lastSaidAt = 0;
     this.lastRepliedAt = 0;
+    this.pauseUntil = null;
   }
 
   // -- the connection ---------------------------------------------------------
@@ -334,6 +335,11 @@ class Agent {
       case 'stop':
         this.clearDuty('stopped');
         this.interrupt();
+        // A stop is seen, not merely done: the crew holds still for a
+        // moment (releasing anything the planner still holds, every
+        // tick, so no leaked goal can tail the person), and then takes
+        // up its own work again.
+        this.pauseUntil = Date.now() + 5000;
         if (this.iAmNearestTo(from)) this.say(`we've stopped, ${from}`, { force: true });
         return;
       case 'follow':
@@ -404,10 +410,43 @@ class Agent {
   clearDuty(why) {
     if (!this.duty) return;
     this.log.note({ bot: this.name, event: 'duty_clear', kind: this.duty.kind, why });
-    // A follow holds the planner with a dynamic goal; let it go with
-    // the duty.
-    if (this.duty.kind === 'follow') this.interrupt();
+    // A follow holds the planner with a dynamic goal and walks with
+    // the follower's movements; let both go with the duty.
+    if (this.duty.kind === 'follow') {
+      this.interrupt();
+      this.workMovements();
+    }
     this.duty = null;
+  }
+
+  /** The movements a follower walks with: no digging, parkour allowed. */
+  followMovements() {
+    const { Movements } = require('mineflayer-pathfinder');
+    const movements = new Movements(this.bot);
+    movements.canDigBlocks = false;
+    this.bot.pathfinder.setMovements(movements);
+  }
+
+  /** The movements the skills work with (digs on the job, careful steps). */
+  workMovements() {
+    const { Movements } = require('mineflayer-pathfinder');
+    const movements = new Movements(this.bot);
+    movements.canDigBlocks = true;
+    movements.allow1by1towers = false;
+    movements.allowParkour = false;
+    this.bot.pathfinder.setMovements(movements);
+    if (this.guard) {
+      try {
+        const plain = movements.safeToBreak.bind(movements);
+        movements.safeToBreak = (block) => {
+          if (!plain(block)) return false;
+          if (!block || !block.position) return true;
+          return this.guard.mayDig(block.position).ok;
+        };
+      } catch (err) {
+        // The planner's own rule stands; the api's guard still holds.
+      }
+    }
   }
 
   /** Stop the walk under our feet, if there is one. A dynamic goal
@@ -453,16 +492,66 @@ class Agent {
     if (duty.kind === 'follow') {
       // A follow is not a series of walks to where the person *was*:
       // the planner's own GoalFollow holds the person's entity and
-      // re-targets as they move, which is the difference between
-      // keeping up and arriving where they stood ten seconds ago.
+      // re-targets as they move. And a follower walks like a person —
+      // no digging, parkour allowed — because the work movements (dig
+      // on, parkour off) make the planner stall a few blocks from a
+      // moving target and never close (probe-follow, FollowerM2:
+      // 13.9 → 8.0 and then 8.0 forever; the same goal with walking
+      // movements closed to 1.3 and held it).
       const entity = this.playerEntity(duty.player);
       if (entity && entity !== duty.goalEntity) {
         duty.goalEntity = entity;
+        this.followMovements();
         try {
           this.bot.pathfinder.setGoal(new goals.GoalFollow(entity, 3), true);
         } catch (err) {
           // The planner could not take the goal; the next tick tries again.
         }
+      }
+      // The wedge, met where the follow lives: a builder pressed
+      // against a face has paths computed for it (probe-follow saw
+      // "success" every four seconds) and makes no first move, and the
+      // walk's own un-wedge lives in gotoNear, which a follow never
+      // calls. So the follow watches its own progress and nudges
+      // itself loose the same way.
+      const distance = entity
+        ? this.bot.entity.position.distanceTo(entity.position)
+        : null;
+      const now = Date.now();
+      if (
+        distance !== null &&
+        distance > 4 &&
+        duty.lastDistance !== undefined &&
+        Math.abs(distance - duty.lastDistance) < 0.5
+      ) {
+        duty.stalledSince = duty.stalledSince || now;
+        if (now - duty.stalledSince > 8000) {
+          duty.stalledSince = now;
+          duty.lastDistance = undefined;
+          duty.goalEntity = null; // force a fresh goal once loose
+          const { nudge } = require('./api');
+          await nudge(this.bot);
+          return;
+        }
+      } else {
+        duty.stalledSince = null;
+      }
+      duty.lastDistance = distance;
+      // The follow's own heartbeat, sparse: what it is holding, and
+      // how far behind. A follow that loses its person is a bug you
+      // can only see in these numbers.
+      if (!duty.lastProgressNote || Date.now() - duty.lastProgressNote > 5000) {
+        duty.lastProgressNote = Date.now();
+        this.log.note({
+          bot: this.name,
+          event: 'duty_progress',
+          kind: 'follow',
+          from: duty.player,
+          distance: entity
+            ? Math.round(this.bot.entity.position.distanceTo(entity.position) * 10) / 10
+            : null,
+          holding: Boolean(entity),
+        });
       }
       return;
     }
@@ -674,6 +763,13 @@ class Agent {
 
   async tick() {
     if (!this.bot || !this.bot.entity) return;
+    // The pause after "stop": visibly still, and the planner is
+    // re-released every tick so nothing can tail the person.
+    if (this.pauseUntil && Date.now() < this.pauseUntil) {
+      this.interrupt();
+      return;
+    }
+    this.pauseUntil = null;
     // A person's request outranks the world's own work, and it never
     // waits on a model: the duty is walked, not asked.
     if (this.duty) {

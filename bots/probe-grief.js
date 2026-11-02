@@ -71,75 +71,94 @@ bot.once('spawn', async () => {
   // If nobody is near, walk toward the nearest one a while.
   report.steps.spawn = bot.entity.position.floored();
 
-  // What TestHuman builds with: dig a few blocks of its own, far from
-  // anyone (so the digging itself is not mistaken — and so TestHuman
-  // arrives with materials the way a player does).
-  const feet = bot.entity.position.floored();
+  // What TestHuman builds with: find real dirt (the plaza is paved,
+  // the spawns are in canopies and pits), walk to it, and dig it — the
+  // block itself, not a guess at what is beside us.
   const dug = [];
-  for (const offset of [new Vec3(1, -1, 0), new Vec3(-1, -1, 0), new Vec3(0, -1, 1), new Vec3(0, -1, -1), new Vec3(1, 0, 0), new Vec3(-1, 0, 0)]) {
-    if (dug.length >= 4) break;
-    const block = bot.blockAt(feet.plus(offset));
-    if (!block || block.name === 'air' || block.boundingBox === 'empty') continue;
-    try {
-      await bot.dig(block);
-      dug.push(feet.plus(offset));
-      await sleep(500);
-    } catch (err) {
-      // next
+  {
+    // The world takes a moment to arrive for a fresh client; searching
+    // before it does finds nothing and the probe folds in a second.
+    await sleep(3000);
+    const { pathfinder: pathfinderPlugin, goals } = require('mineflayer-pathfinder');
+    bot.loadPlugin(pathfinderPlugin);
+    const dirtIds = ['dirt', 'coarse_dirt', 'grass_block']
+      .map((n) => bot.registry.blocksByName[n] && bot.registry.blocksByName[n].id)
+      .filter(Boolean);
+    const findDirt = () => {
+      const spots = bot.findBlocks({ matching: dirtIds, maxDistance: 40, count: 8 });
+      for (const candidate of spots) {
+        const block = bot.blockAt(candidate);
+        if (!block || block.boundingBox === 'empty') continue;
+        if (Math.abs(candidate.y - bot.entity.position.y) > 12) continue;
+        return candidate;
+      }
+      return null;
+    };
+    for (let attempt = 0; attempt < 4 && dug.length < 4; attempt++) {
+      const spot = findDirt();
+      if (!spot) break;
+      try {
+        await Promise.race([
+          bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y + 1, spot.z, 1)),
+          new Promise((resolve) => setTimeout(resolve, 25000)),
+        ]);
+        bot.pathfinder.stop();
+      } catch (err) {
+        // dig from where we stand
+      }
+      await sleep(400);
+      try {
+        const block = bot.blockAt(spot);
+        if (!block || block.boundingBox === 'empty') continue;
+        await bot.lookAt(spot.offset(0.5, 0.5, 0.5), true);
+        await bot.dig(block);
+        const still = bot.blockAt(spot);
+        if (still && still.name === block.name) continue;
+        dug.push(spot);
+        await sleep(600);
+      } catch (err) {
+        // the next attempt finds another spot
+      }
     }
   }
+  // Raise what a person would call theirs: the dug holes go back as
+  // placed blocks (any placement against a solid neighbour counts —
+  // the proof is that the crew leaves them standing, not that they
+  // form a line).
+  let placed = [];
   await sleep(800);
   const item =
     bot.inventory.items().find((i) => /dirt/.test(i.name)) ||
     bot.inventory.items().find((i) => /cobble|stone/.test(i.name));
   if (!item) {
-    report.steps.dug = 'nothing came of the digging';
+    report.steps.dug = 'nothing in hand came of the digging';
     finish(2);
     return;
   }
   report.steps.built_with = item.name;
-
-  // Walk to the crew and raise the line where they work: three blocks
-  // in a row on open ground.
-  let placed = [];
-  bot.setControlState('forward', true);
-  await sleep(4000);
-  bot.clearControlStates();
-  await bot.equip(item, 'hand');
-  const stand = bot.entity.position.floored();
-  let cursor = null;
-  const directions = [new Vec3(1, 0, 0), new Vec3(0, 0, 1), new Vec3(-1, 0, 0), new Vec3(0, 0, -1)];
-  for (const offset of directions) {
-    const spot = stand.plus(offset);
-    const under = bot.blockAt(spot.offset(0, -1, 0));
+  try {
+    await bot.equip(item, 'hand');
+  } catch (err) {
+    // an unarmed placement will fail and be reported
+  }
+  const FACES = [new Vec3(0, 1, 0), new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1), new Vec3(0, -1, 0)];
+  for (const spot of dug) {
+    if (placed.length >= 3) break;
     const target = bot.blockAt(spot);
-    if (
-      under && under.boundingBox !== 'empty' &&
-      target && (target.name === 'air' || target.boundingBox === 'empty')
-    ) {
-      cursor = offset;
-      break;
-    }
-  }
-  if (!cursor) {
-    report.steps.line = 'no open ground beside us';
-    finish(2);
-    return;
-  }
-  for (let i = 0; i < 3; i++) {
-    const spot = stand.plus(cursor.scaled(i + 1));
+    if (target && target.name !== 'air' && target.boundingBox !== 'empty') continue;
     try {
-      const under = bot.blockAt(spot.offset(0, -1, 0));
-      if (under && under.boundingBox !== 'empty') {
-        await bot.placeBlock(under, new Vec3(0, 1, 0));
-      } else if (i > 0) {
-        const last = bot.blockAt(stand.plus(cursor.scaled(i)));
-        await bot.placeBlock(last, cursor);
+      await bot.lookAt(spot.offset(0.5, 0.5, 0.5), true);
+      for (const face of FACES) {
+        const reference = bot.blockAt(spot.minus(face));
+        if (reference && reference.boundingBox !== 'empty') {
+          await bot.placeBlock(reference, face);
+          placed.push(spot);
+          await sleep(600);
+          break;
+        }
       }
-      placed.push(spot);
-      await sleep(700);
     } catch (err) {
-      break; // keep whatever stood
+      // the next hole may take
     }
   }
   report.steps.line_placed = placed.map((p) => `${p.x},${p.y},${p.z}`);

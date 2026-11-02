@@ -29,12 +29,38 @@ OUT="$AW_LOG_DIR/steady-$(date +%Y%m%d-%H%M%S)"
 CSV="$OUT.csv"
 JSONL="$OUT.jsonl"
 PAPER_LOG="$AW_LOG_DIR/paper.log"
-CONSOLE="${AW_TMUX_SESSION}:0"
+
+# The server's console is the tmux pane whose terminal the java process
+# was born on -- panes get reshuffled across restarts (the 2026-11-02
+# run typed "tps" into a bystander bash for half an hour), so the pane
+# is found, not assumed.
+find_console() {
+    local java_pid tty pane pty
+    java_pid="$(pgrep -f 'paper-.*\.jar' | head -1)"
+    [ -n "$java_pid" ] || return 1
+    tty="$(ps -o tty= -p "$java_pid" | tr -d ' ')"
+    [ -n "$tty" ] || return 1
+    while read -r pane pty; do
+        if [ "$pty" = "/dev/$tty" ]; then
+            echo "$pane"
+            return 0
+        fi
+    done < <(tmux list-panes -a -F "#{session_name}:#{window_index} #{pane_tty}" 2>/dev/null)
+    return 1
+}
+CONSOLE="$(find_console)"
+if [ -z "$CONSOLE" ]; then
+    echo "could not find the server console pane (is the world up?)" >&2
+    exit 1
+fi
+echo "the console pane is $CONSOLE"
 
 [ -x "$AW_NODE/bin/node" ] || { echo "no node at $AW_NODE" >&2; exit 1; }
-if pgrep -f "probe-steady" >/dev/null 2>&1; then
+# The guard matches the probe's own process line (a node process), not
+# any wrapper that happens to carry the words.
+if pgrep -f "node .*probe-steady" >/dev/null 2>&1; then
     echo "a steady probe is already running:" >&2
-    pgrep -af "probe-steady" >&2
+    pgrep -af "node .*probe-steady" >&2
     exit 1
 fi
 echo "the steady run: ${MINUTES} minutes, a sample every 30 s, into $CSV"
@@ -61,9 +87,11 @@ for (( i = 0; i < SAMPLES; i++ )); do
     tmux send-keys -t "$CONSOLE" -l "tps" </dev/null 2>/dev/null || true
     tmux send-keys -t "$CONSOLE" Enter </dev/null 2>/dev/null || true
     sleep 3
+    # Under pipefail a slow console answer (grep finds nothing) would
+    # end the whole run, so this pipeline is allowed to come up empty.
     TPS=$(tail -c "+$((MARK + 1))" "$PAPER_LOG" 2>/dev/null \
         | grep -oE 'TPS from last 1m, 5m, 15m: [0-9]+(\.[0-9]+)?' | tail -1 \
-        | sed 's/.*: //')
+        | sed 's/.*: //' || true)
     STATS=$(curl -sS --max-time 3 "http://127.0.0.1:$AW_REFLEX_PORT/stats" 2>/dev/null || echo '{}')
     MEM=$(awk '/^MemAvailable:/ {printf "%.1f", $2/1048576}' /proc/meminfo)
     LOAD=$(cut -d' ' -f1 /proc/loadavg)

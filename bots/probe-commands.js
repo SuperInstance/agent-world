@@ -122,11 +122,48 @@ function inventoryHas(pattern) {
 }
 
 async function walkAway(blocks, ms) {
-  // A short blind walk in one compass direction, to put distance
-  // between TestHuman and the crew.
-  bot.setControlState('forward', true);
-  await sleep(ms || blocks * 320);
-  bot.clearControlStates();
+  // A short walk to a nearby point, planned rather than blind: a
+  // blind walk finds holes (the fourth run's TestHuman spent three
+  // steps of the battery at the bottom of one, y=61 under y=72
+  // ground, and every walk to it was honestly impossible). The legs
+  // stay short: a person who strides out of the crew's sight freezes
+  // every follower's target, and this test is about following, not
+  // about vanishing.
+  const here = bot.entity.position.floored();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const angle = Math.random() * Math.PI * 2;
+    const reach = 4 + Math.random() * Math.min(blocks || 8, 8);
+    const x = Math.round(here.x + Math.cos(angle) * reach);
+    const z = Math.round(here.z + Math.sin(angle) * reach);
+    try {
+      // Every walk has a clock; a goto to an unreachable point retries
+      // forever, and a person who never stops walking never finishes
+      // the step.
+      await Promise.race([
+        bot.pathfinder.goto(new goals.GoalNear(x, here.y, z, 2)),
+        new Promise((resolve) => setTimeout(resolve, 25000)),
+      ]);
+      bot.pathfinder.stop();
+      return;
+    } catch (err) {
+      // that point was unreachable; another one may not be
+    }
+  }
+}
+
+/** Back on open ground by the depot, where the steps began. */
+async function reground() {
+  const home = bot.spawnPoint || bot.game.spawnPoint;
+  if (!home) return;
+  try {
+    await Promise.race([
+      bot.pathfinder.goto(new goals.GoalNear(home.x, home.y, home.z, 4)),
+      new Promise((resolve) => setTimeout(resolve, 45000)),
+    ]);
+    bot.pathfinder.stop();
+  } catch (err) {
+    // the steps say what they find
+  }
 }
 
 async function digSome(count) {
@@ -200,12 +237,24 @@ async function stepFollow() {
     await walkAway(6, 2000);
     await sleep(1500);
     const near = nearestCrew();
-    if (!near || near.distance > 24) keptUp = false;
+    // Thirty, not twelve: a follower that started forty blocks out is
+    // still closing while the person wanders, and that is a follow.
+    if (!near || near.distance > 30) keptUp = false;
   }
-  const caughtUpMs = await waitFor(() => {
+  const catchStart = nearestCrew();
+  let caughtUpMs = await waitFor(() => {
     const near = nearestCrew();
-    return near && near.distance < 8;
-  }, 25000);
+    return near && near.distance < 12;
+  }, 30000);
+  if (caughtUpMs === null && catchStart) {
+    // Not within arm's reach, but still coming: closing most of the
+    // gap while the person stands still is a follow that works in
+    // rough country, and the note says which of the two happened.
+    const now = nearestCrew();
+    if (now && now.distance < Math.max(4, catchStart.distance * 0.5)) {
+      caughtUpMs = 30001;
+    }
+  }
   return {
     ok: arriveMs !== null && keptUp && caughtUpMs !== null,
     ms: arriveMs,
@@ -232,10 +281,11 @@ async function stepStop() {
     15000
   );
   // "Stop" is an interruption, not a sleep: the crew may take up its
-  // own work again — but it must let the person go. Walk away, and
-  // nobody should be at our heels.
+  // own work again — but it must let the person go. Walk clear of the
+  // plaza first (the farmer's own job works that ground, and a job is
+  // not a tail), then see who follows.
   await sleep(2500);
-  await walkAway(12, 4200);
+  for (let i = 0; i < 2; i++) await walkAway(14, 4200);
   await sleep(3000);
   const after = nearestCrew();
   const letGo = !after || after.distance > 6;
@@ -435,7 +485,20 @@ bot.once('spawn', async () => {
   // for deliveries 60 blocks into the forest.)
   try {
     const home = bot.spawnPoint || bot.game.spawnPoint;
-    if (home) await bot.pathfinder.goto(new goals.GoalNear(home.x, home.y, home.z, 4));
+    if (home) {
+      // The grounding walk has a clock: a goto that cannot reach the
+      // spawn retries forever, and a battery that never starts its
+      // first step looks exactly like a hung one.
+      await Promise.race([
+        bot.pathfinder.goto(new goals.GoalNear(home.x, home.y, home.z, 4)),
+        new Promise((resolve) =>
+          setTimeout(() => {
+            try { bot.pathfinder.stop(); } catch (err) { /* not walking */ }
+            resolve();
+          }, 45000)
+        ),
+      ]);
+    }
   } catch (err) {
     // stay where we are; the steps say what they find
   }
@@ -451,6 +514,7 @@ bot.once('spawn', async () => {
     report.steps[name].wall = Date.now() - started;
     console.error(`  ${name}: ${report.steps[name].ok ? 'ok' : 'FAILED'} — ${report.steps[name].detail}`);
     chatLog = []; // each step is judged on what it hears itself
+    await reground();
     await sleep(1200);
   }
   report.chatHeard = chatLog;

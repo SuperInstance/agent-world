@@ -99,15 +99,21 @@ async function main() {
         ledger,
         botName: member.name,
         // The people, as this builder sees them, near a given point.
+        // A player's position lives on their entity (the player list
+        // carries none of its own) — the same lesson the nearest-routing
+        // learned the hard way: read player.position and every
+        // observation throws where no one is looking.
         humansNear: (position) => {
           if (!agent.bot || !agent.bot.players || !position) return [];
           const out = [];
           for (const player of Object.values(agent.bot.players)) {
-            if (!player || !player.position || !player.username) continue;
+            if (!player || !player.username) continue;
+            const entity = player.entity;
+            if (!entity || !entity.position) continue;
             if (player.username === member.name || isAgent(player.username)) continue;
             out.push({
               name: player.username,
-              distance: player.position.distanceTo(position),
+              distance: entity.position.distanceTo(position),
             });
           }
           return out;
