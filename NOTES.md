@@ -345,3 +345,48 @@ re-run.
   unscored — so a hold does not depress the success rate by itself;
   the pool recovers when real wins return. Watching the 10:19 lapse
   with the patched hunt behind it.
+
+- 10:26–10:58 — the doom loop named and broken. The watcher held
+  Pebble again at 10:24, one window after the 10:19 TTL lapse — for
+  the silence the 09:49 hold itself had made (the stall lookback is 15
+  min, the TTL 30: a lapsed hold always re-trips). And the fold read
+  again: refusals are yields, not scored plays, so Pebble's pool of
+  wins sat empty all morning — every project play scored 'partial'
+  (predict kind none). Two changes: **the watcher does not enforce a
+  soft hold on an agent that played in the window** (plays or a
+  drift.yield explain it; ops/drift-watch.py, "soft hold not
+  enforced" — live from 10:31), and **a duty may carry its own
+  result** — a supply step that mined, staged, or delivered is a won
+  play (agent.js honors result.result; the hunt and the fetches say
+  win).
+- 10:54–11:19 — the walk itself, dissected with the repo's own
+  gotoNear driven from probes (probe-walkstate.js, probe-path.js):
+  the follower sticks at a 1-up step reporting moving=true with zero
+  displacement until a nudge frees it (a lone probe needed two, then
+  arrived in 13.2 s); the crew's walks died at three nudges. Five
+  now (the wedged-walk test's bound honestly re-measured: ~23 s
+  against a 20 s budget). A dig under way counts as progress in the
+  stall watcher. The hunt's walk aims at dig range (3), not
+  adjacency (2) — a GoalNear(2) into an embedded log searches
+  forever. The refusals are remembered ten minutes (HUNT_MEMORY):
+  the five nearest candidates to the gully floor were three keep-out
+  refusals and two walk failures, re-bought every step, the sixth
+  candidate — the nearest ALLOWED log — never reached.
+- 11:19 — Pebble lifted by console tp to the farm site (-10,70,0):
+  **four spruce logs mined** (result win) — the hunt works from
+  terrace ground. But "mined" was not "held": collectAt gave up when
+  the walk to the block's own cell failed, never chasing the drop
+  (it now breaks to collectEntity). Two logs each went to b037/b044
+  as tosses at 11:26 — and **despawned** (5-min item life) before
+  any owner stepped over them: the board said "staged", the world
+  held nothing. board-unstage.js re-opens a lied-to project; the
+  delivery now walks to distance 1 before the toss; the owners
+  pickup_near their site before waiting.
+- Not yet true: a chest placed, a hoe crafted, a farm planted. The
+  chain that remains: Pebble's walks fail from the gully floor (the
+  restart put it back there; the tp does not survive a restart), and
+  the 5-minute despawn races the owners' 13–45 s project-step
+  cadence — the library gather drops logs in the pile, Timber takes
+  them only if its project step is chosen inside the window. The
+  depot chest (b037) is the fix for its own delivery problem; it has
+  not closed yet.
