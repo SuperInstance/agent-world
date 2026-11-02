@@ -430,6 +430,24 @@ async function buildPlanned(agent, project) {
 
   const block = missing.find((b) => b.name === name);
   await standNear(agent, block.x, block.y, block.z);
+  // A placement the server will not answer is not a placement: it
+  // refuses one that is out of reach SILENTLY, and mineflayer times
+  // out with no reason (b069's grove cell, 2026-11-02 — four timeouts
+  // on one block while the builder stood in the pit). The honest
+  // outcome is "cannot reach": the stall clock judges a project that
+  // cannot get to its own work, and the council re-proposes on ground
+  // the plan can stand on.
+  const from = agent.position();
+  const reach = from
+    ? Math.hypot(from.x - block.x, from.y - block.y, from.z - block.z)
+    : Infinity;
+  if (reach > 4.4) {
+    return {
+      done: false,
+      detail: `cannot reach ${block.x},${block.y},${block.z} for the ${name}` +
+        (from ? ` (standing at ${from.x},${from.y},${from.z}, ${reach.toFixed(1)} away)` : ''),
+    };
+  }
   // The plan meets the world: a trunk or a boulder may stand in a
   // planned cell (the shelter's first wall cell held a spruce_log —
   // surfaceAt reads the ground, not the trunk growing on it,

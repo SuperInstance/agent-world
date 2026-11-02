@@ -234,7 +234,38 @@ function buildProposal(kind, world, extras = {}) {
     };
   }
   if (kind === 'shelter') {
-    const spot = world.standableNear(depot.x + 8, depot.y, depot.z + 8, 8);
+    // The footprint must be CLEAR, not just standable: surfaceAt
+    // skips leaves and logs when it reads the ground, so the first
+    // site it picked stood inside a dense spruce grove — the plan's
+    // wall and roof cells grew through trunks and canopy, the walk
+    // into the pocket hung the planner, and every placement from the
+    // pit below was silently out of reach (b069, 2026-11-02 19:16Z:
+    // "Server did not answer the placement", four in a row). A spot
+    // whose three cells above the ground are not air is a grove, and
+    // a grove is not a shelter site — the next candidate ring out is.
+    const replaceable = (name) => name === 'air' || name === 'cave_air'
+      || name === 'void_air' || name.endsWith('_grass') || name === 'fern';
+    const clearAbove = (cand) => {
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          const ground = world.surfaceAt(cand.x + dx, cand.z + dz);
+          if (ground == null) return false;
+          for (let dy = 1; dy <= 3; dy++) {
+            const cell = world.blockAt(cand.x + dx, ground + dy, cand.z + dz);
+            if (cell && !replaceable(cell.name) && cell.boundingBox !== 'empty') return false;
+          }
+        }
+      }
+      return true;
+    };
+    let spot = null;
+    for (const [dx, dz] of [[8, 8], [12, 4], [12, 12], [4, 12], [12, 0], [0, 12], [-8, 8], [8, -8]]) {
+      const cand = world.standableNear(depot.x + dx, depot.y, depot.z + dz, 6);
+      if (cand && clearAbove(cand)) {
+        spot = cand;
+        break;
+      }
+    }
     if (!spot) return null;
     const blocks = [];
     // A 3x3 hut: a cobble ring two high on a 3x3 footprint, a plank
