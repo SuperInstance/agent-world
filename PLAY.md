@@ -40,13 +40,24 @@ here"), otherwise the nearest one takes it.
 | `gather wood` / `gather stone` | Pebble chops or mines it and brings it to **you** (a few minutes — it is really doing it) |
 | `help me build` | Timber comes to you; place two blocks in a line and he carries the line on, or hands you materials |
 | `what are you doing?` | the nearest one says what it is up to |
+| `what are you building?` | the community's own answer: the projects on the board, with their progress |
+| `build a farm` · `plant trees` · `build a chest` · `build a shelter` | your request becomes a project on the community's board, checked by the same rules as theirs — if the ground allows it, the crew takes it up |
 | `go home` | the nearest one walks back to the depot |
 | `help` | the short version of this table |
 
 ## What to expect, and the limits
 
 - Kite greets you when you arrive (once every ten minutes, not every
-  reconnect).
+  reconnect) — and the greeting tells you what the community is
+  building and how to lend a hand.
+- **The community keeps working whether you are there or not.** A
+  council picks the next project from what the world needs (a chest at
+  the depot so goods stop landing in a pile, the forest replanted, a
+  farm, a path, a shelter); the gatherer supplies, the builders build
+  to the plan, and Kite walks the finished work and files what is
+  missing. Every project and every block it places is checked against
+  the world's rules first — including yours: a plan that would build
+  over your blocks is refused before it starts.
 - **They never touch your stuff.** Blocks you place are yours: they
   won't mine them, they won't build within a few blocks of them, they
   won't open a chest you placed, and they never attack a player. Say

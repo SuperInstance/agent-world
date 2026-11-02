@@ -40,19 +40,61 @@ const TICK_MS = 50; // a Minecraft tick is 1/20 s
  * and the level filter — a block the builder cannot reach is not a
  * block it can work on — is applied to the results.
  */
-function findByIds(bot, registry, names, maxDistance, feet, anyLevel) {
+function findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY, exclude) {
   const ids = [];
   for (const name of names) {
     const block = registry.blocksByName[name];
     if (block) ids.push(block.id);
   }
+  const skip = new Set(exclude || []);
   const spots = bot.findBlocks({ matching: ids, maxDistance, count: 96 });
-  for (const spot of spots) {
+  // The **nearest** candidate comes first. `findBlocks` returns its
+  // matches in no particular order, and the order decided which tree
+  // the gatherer walked to: on 2026-11-02 it walked to the spruce on
+  // the hillside (y=83-86, thirteen blocks up) and refused the walk,
+  // while six oak logs stood at the depot's own level — two of them
+  // within two blocks of the gatherer's feet.
+  const ordered = spots.slice().sort((a, b) => {
+    const da = (a.x - feet.x) ** 2 + (a.y - feet.y) ** 2 + (a.z - feet.z) ** 2;
+    const db = (b.x - feet.x) ** 2 + (b.y - feet.y) ** 2 + (b.z - feet.z) ** 2;
+    return da - db;
+  });
+  for (const spot of ordered) {
     if (!anyLevel && Math.abs(spot.y - feet.y) > 2) continue;
+    if (minY != null && spot.y < minY) continue;
+    if (maxY != null && spot.y > maxY) continue;
+    if (skip.size && skip.has(`${spot.x},${spot.y},${spot.z}`)) continue;
     const block = bot.blockAt(spot);
     if (block) return block;
   }
   return null;
+}
+
+/**
+ * The items lying on the ground near the depot — the pile the crew's
+ * own gathering leaves there.
+ *
+ * Dropped items are entities: ``type`` "object", the item's name, and
+ * the position where it lies. This asks what is *there* before the
+ * caller walks nine points to find out (see ``take_from_depot``).
+ */
+function groundItemsNear(bot, spot, radius, wanted) {
+  const out = [];
+  for (const entity of Object.values(bot.entities || {})) {
+    if (!entity || !entity.position) continue;
+    // A dropped item is an entity whose type is "other" and whose
+    // name is just "item" — the KIND it carries lives in metadata
+    // this layer does not read (probe-drop-fields.js, 2026-11-02:
+    // type "other", name "item", displayName "Item"). Type-based
+    // looks were blind to every drop ever made: the pile look
+    // declined at once, the ring never walked, and the crew starved
+    // beside its own deliveries. The wanted-list cannot be matched
+    // here — the caller's inventory decides what a walk picked up.
+    if (entity.name !== 'item' && entity.name !== 'Item') continue;
+    if (Math.hypot(entity.position.x - spot.x, entity.position.z - spot.z) > radius) continue;
+    out.push({ name: 'item', x: entity.position.x, y: entity.position.y, z: entity.position.z });
+  }
+  return out;
 }
 
 /**
@@ -179,6 +221,19 @@ function attemptWalk(bot, x, y, z, distance, deadline) {
         finish('arrived');
         return;
       }
+      // A dig under way is progress. The planner digs through a wall on
+      // its way (that is what canDigBlocks is for), and a dig takes
+      // seconds in which the feet do not move: the stall watcher read
+      // that as wedged, nudged the dig away, and the next attempt began
+      // the same dig to be nudged again — a gatherer in the depot gully
+      // could not start a single walk (2026-11-02, probe-wedge: standing
+      // free on stone, five walks, five "could not start", every path
+      // beginning with a wall). The walk's own deadline still bounds it.
+      if (bot.targetDigBlock) {
+        checkpoint = bot.entity.position.clone();
+        rearm();
+        return;
+      }
       if (bot.entity.position.distanceTo(checkpoint) >= STALL_PROGRESS) {
         checkpoint = bot.entity.position.clone();
         rearm();
@@ -253,13 +308,19 @@ async function gotoNear(bot, x, y, z, distance = 2, timeout = 20000) {
         if (!STOP_RACE.test(message)) throw new Error(message);
         outcome = 'stalled';
       }
-      // A stall buys one nudge; the third stall ends the walk, and the
-      // whole budget ending it does too.
+      // A stall buys one nudge. A stall is not always a wedge: on the
+      // depot gully's rim the follower reports moving and mines nothing
+      // while the feet do not advance a block — a step-up it cannot
+      // time — and the nudge's back-off-and-jump is what realigns it
+      // (probe-follow, 2026-11-02: stuck twice at the same 1-up step,
+      // freed on the second nudge, arrived in 13.2 s). Three stalls
+      // were not enough for the crew on that same ground, so a walk
+      // now carries five nudges; the whole budget still ends it.
       if (outcome === 'timeout') {
         reason = 'the walk took too long';
         break;
       }
-      if (++nudges > 2) {
+      if (++nudges > 5) {
         reason = 'the walk could not start';
         break;
       }
@@ -373,9 +434,18 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       // reach. So the candidates are the ones at the builder's own
       // level, unless the query asks for any level.
       const anyLevel = q.any_level === true;
+      // A search may bound itself in the world: min_y / max_y. The
+      // depth-minding searches use it (surface stone, not bedrock).
+      const minY = Number.isFinite(q.min_y) ? q.min_y : null;
+      const maxY = Number.isFinite(q.max_y) ? q.max_y : null;
+      // `exclude` (["x,y,z", ...]): candidates a caller already tried
+      // and was refused — the guard's keep-out can own the nearest
+      // tree, and the honest gather moves on to the next one instead
+      // of mining the same refusal forever.
+      const exclude = Array.isArray(q.exclude) ? q.exclude : null;
       let found = null;
       if (names) {
-        found = findByIds(bot, registry, names, maxDistance, feet, anyLevel);
+        found = findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY, exclude);
       } else {
         // Any block at all: the name-less search keeps the function
         // matcher, which scans the neighbourhood itself.
@@ -383,6 +453,8 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
           matching: (block) => {
             if (!block || !block.position) return false;
             if (block.name === 'air') return false;
+            if (minY != null && block.position.y < minY) return false;
+            if (maxY != null && block.position.y > maxY) return false;
             if (anyLevel) return true;
             return Math.abs(block.position.y - feet.y) <= 2;
           },
@@ -406,6 +478,47 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
     },
     leave_at_depot: async (name, count) => {
       const spot = depotSpot(bot);
+      // The chest first. A pile on the ground is a race: whichever
+      // builder (or watcher) walks the depot sweeps it up, and goods
+      // placed there were "delivered" and gone in the same minute (the
+      // playtest's own finding). A chest the world placed — never a
+      // person's — holds the delivery for whoever it was for.
+      const chest = findByIds(bot, registry, ['chest'], 12, spot, true);
+      if (chest && !guard.isPlayerChest(chest.position)) {
+        try {
+          await gotoNear(bot, chest.position.x, chest.position.y, chest.position.z, 1);
+          if (openChest) {
+            openChest.close();
+            openChest = null;
+          }
+          const container = await bot.openContainer(chest);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          let put = 0;
+          const items = name
+            ? bot.inventory.items().filter((i) => i.name === name)
+            : bot.inventory.items();
+          for (const item of items) {
+            const wanted = name ? Math.min(Number(count) || item.count, item.count) : item.count;
+            try {
+              await container.deposit(item.type, null, wanted);
+              put += 1;
+            } catch (err) {
+              // The chest can be full; the rest go back to the pile way.
+            }
+          }
+          try {
+            container.close();
+          } catch (err) {
+            // Already closed.
+          }
+          if (put) {
+            await gotoNear(bot, spot.x, spot.y, spot.z + 3, 1, 5000).catch(() => {});
+            return { ok: true, detail: `left ${put} stack(s) in the depot chest` };
+          }
+        } catch (err) {
+          // The chest would not open: the pile way below still works.
+        }
+      }
       try {
         await gotoNear(bot, spot.x, spot.y, spot.z, 0);
       } catch (err) {
@@ -452,16 +565,82 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       if (!wanted.length) return { ok: false, detail: 'nothing was asked for' };
       const spot = depotSpot(bot);
       const before = new Map(wanted.map((n) => [n, bot.inventory.count(n, null)]));
+      // The chest first, the same chest leave_at_depot fills: a
+      // delivery that went into the chest is taken from the chest, not
+      // hunted on the ground where another builder may already carry it
+      // away.
+      const chest = findByIds(bot, registry, ['chest'], 12, spot, true);
+      if (chest && !guard.isPlayerChest(chest.position)) {
+        try {
+          await gotoNear(bot, chest.position.x, chest.position.y, chest.position.z, 1);
+          if (openChest) {
+            openChest.close();
+            openChest = null;
+          }
+          const container = await bot.openContainer(chest);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          const held = container.containerItems();
+          let taken = null;
+          for (const name of wanted) {
+            const there = held.filter((i) => i.name === name);
+            if (!there.length) continue;
+            const count = there.reduce((s, i) => s + i.count, 0);
+            try {
+              await container.withdraw(there[0].type, null, count);
+              taken = { ok: true, name, count, detail: `took ${count} ${name} from the depot chest` };
+              break;
+            } catch (err) {
+              // This one would not leave the chest; the next name may.
+            }
+          }
+          try {
+            container.close();
+          } catch (err) {
+            // Already closed.
+          }
+          if (taken) return taken;
+        } catch (err) {
+          // No chest, or it would not open: the ground way below.
+        }
+      }
+      // The pile on the ground: the items lying near the depot, which
+      // the crew's own gathering leaves there. The walk below is
+      // expensive — nine points around the depot, each one a walk that
+      // may fail — and it used to be paid on every call, whether or
+      // not there was anything to pick up. That made a supply run take
+      // 68 to 164 seconds, and a long step is a long silence: the drift
+      // detector read the gatherer's work as a stall and held the very
+      // bot the community was waiting on (2026-11-02, 09:11–09:14 UTC).
+      //
+      // So: look before walking. If nothing of what was asked for lies
+      // on the ground near the depot, say so at once.
+      const pile = groundItemsNear(bot, spot, 8, wanted);
+      if (!pile.length) {
+        return { ok: false, detail: `the depot has no ${wanted.join(', ')}` };
+      }
       // One ring around the depot, walked once: the pickup has no filter,
       // so a single pass collects the whole pile whatever it is, and the
       // first wanted item that appears ends the walk. (Asking once per
       // item made a builder pace the depot for minutes while the
-      // gatherers swept the pile back up behind it.)
+      // gatherers swept the pile back up behind it.) The points that
+      // hold something come first; the rest of the ring is walked only
+      // if the pile is still there.
       const ring = [
         [0, 0], [2, 0], [-2, 0], [0, 2], [0, -2],
         [2, 2], [-2, -2], [2, -2], [-2, 2],
       ];
-      for (const [dx, dz] of ring) {
+      const points = ring
+        .map(([dx, dz]) => ({
+          dx,
+          dz,
+          near: pile.some(
+            (item) =>
+              Math.abs(item.x - (spot.x + dx)) <= 2 &&
+              Math.abs(item.z - (spot.z + dz)) <= 2
+          ),
+        }))
+        .sort((a, b) => (a.near === b.near ? 0 : a.near ? -1 : 1));
+      for (const { dx, dz } of points) {
         try {
           await gotoNear(bot, spot.x + dx, spot.y, spot.z + dz, 1);
         } catch (err) {
@@ -507,6 +686,20 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       if (!block) return { ok: false, detail: 'there is no block there' };
       if (block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') {
         return { ok: false, detail: 'there is nothing to mine there' };
+      }
+      // The depth floor. Through the playable round the crew mined
+      // itself to bedrock and spent hours there (Pebble, 72 below the
+      // depot, docs/playtest-2026-11-02-playable.md) — the nearest stone
+      // is down, and a gatherer with no floor under its search digs its
+      // own trap. No skill mines below y=48: the quarry rim and the
+      // hillsides carry all the stone a path needs. The planner is not
+      // bound by this (a walk out of a pit digs upward through blocks
+      // above the floor) — this is the workface's rule, not the road's.
+      if (block.position.y < 48) {
+        return {
+          ok: false,
+          detail: 'too deep: the community mines no lower than y=48 — look on the hillsides',
+        };
       }
       // A person's block is never mined, however good it looks. This is
       // the workface of the no-grief rule: every skill digs through
@@ -597,13 +790,41 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
         return { ok: false, detail: String((err && err.message) || err) };
       }
     },
-    move_to: async (x, y, z) => {
+    move_to: async (x, y, z, distance) => {
       try {
-        await gotoNear(bot, x, y, z, 2);
+        await gotoNear(bot, x, y, z, distance || 2);
         return { ok: true, detail: `walked to ${x}, ${y}, ${z}` };
       } catch (err) {
         return { ok: false, detail: String((err && err.message) || err) };
       }
+    },
+    /** Walk over the item drops lying near a point, so the server's
+     *  pickup hands them to the bot. A delivery is a toss: the item
+     *  lands where it skids, two blocks from the owner who waited for
+     *  it, and nobody's inventory changes while both stand there
+     *  (2026-11-02: b037 staged two logs for eleven minutes before
+     *  this existed). Returns how many drops were walked over. */
+    pickup_near: async (x, z, radius) => {
+      // By TYPE, not name: item entities' `name` is unreliable across
+      // mineflayer versions (probe-stock reads them by type), and a
+      // name filter matched nothing at b037's site on 2026-11-02
+      // while two delivered logs lay in despawn's reach.
+      const drops = Object.values(bot.entities).filter((e) => {
+        if (!e || !e.position) return false;
+        if (e.name !== 'item' && e.name !== 'Item') return false;
+        return Math.hypot(e.position.x - x, e.position.z - z) <= (radius || 8);
+      });
+      let walked = 0;
+      for (const d of drops.slice(0, 4)) {
+        try {
+          await gotoNear(bot, d.position.x, d.position.y, d.position.z, 0, 8000);
+        } catch (err) {
+          continue; // this one is out of reach; the next may not be
+        }
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        walked += 1;
+      }
+      return walked;
     },
     equip: async (name) => {
       const item = bot.inventory.items().find((i) => i.name === name);
@@ -619,10 +840,29 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       const wanted = count || 1;
       const item = registry.itemsByName[name];
       if (!item) return { ok: false, detail: `there is no item called ${name}` };
-      const recipes = bot.recipesFor(item.id, null, wanted);
-      if (!recipes.length) return { ok: false, detail: `there is no recipe for ${name}` };
+      // A 3x3 recipe needs a bench: chest, hoe — anything three columns
+      // wide. mineflayer's recipesFor takes the table block, and
+      // without one those recipes are simply invisible ("there is no
+      // recipe for chest", 2026-11-02 — the recipe existed; the table
+      // did not). The nearest bench within reach is used; a missing
+      // bench is said plainly so the caller can place one.
+      const tableId = registry.blocksByName['crafting_table']
+        ? registry.blocksByName['crafting_table'].id
+        : null;
+      const tableBlock = tableId
+        ? bot.findBlock({ matching: tableId, maxDistance: 16 })
+        : null;
+      const recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
+      if (!recipes.length) {
+        return {
+          ok: false,
+          detail: tableBlock
+            ? `there is no recipe for ${name} even at the bench`
+            : `there is no recipe for ${name} without a crafting table nearby`,
+        };
+      }
       try {
-        await bot.craft(recipes[0], wanted);
+        await bot.craft(recipes[0], wanted, tableBlock || undefined);
         return { ok: true, detail: `crafted ${wanted} ${name}` };
       } catch (err) {
         return { ok: false, detail: String((err && err.message) || err) };
@@ -736,8 +976,13 @@ async function collectAt(bot, position) {
     try {
       await gotoNear(bot, position.x, position.y, position.z, 1);
     } catch (err) {
-      // Could not walk there: the item stays on the ground.
-      return false;
+      // The block's own cell cannot be stood beside — a trunk up a
+      // face, a log on a ledge — but the DROP is not the block: it
+      // falls to the ground below, where the feet can go. Chase the
+      // entity, not the cell (2026-11-02: four spruce logs mined on
+      // the terrace, "mined spruce_log" without "and collected it",
+      // the bag empty, while the drops lay on the walkable ground).
+      break;
     }
     // The server hands the item over when the bot is close enough; it
     // takes a moment, so the wait is generous.

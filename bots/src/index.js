@@ -148,10 +148,97 @@ async function main() {
   // once, by the builder it was for.
   for (const agent of agents) agent.community = agents;
 
+  // -- the community's own work -------------------------------------------------
+  //
+  // The board (projects with scope, site, materials, owner, status),
+  // the validator's word on every proposal, the council that picks
+  // what the world needs next (deterministic first; a DeepInfra model
+  // may propose, never decide), and the project service that walks a
+  // ratified plan. All four live in this process, the one process that
+  // sees the world; the board's event log sits beside the no-grief
+  // ledger, and its snapshot at runtime/board.json is the one file a
+  // returning human's page reads.
+  const { Board } = require('./board');
+  const { Council, buildProposal } = require('./council');
+  const { WorldLook } = require('./worldlook');
+  const { ProjectService } = require('./projects');
+  const { validate } = require('./validator');
+
+  const runtimeDir = path.join(__dirname, '..', '..', 'runtime');
+  const board = new Board(
+    process.env.AW_BOARD_LOG || path.join(runtimeDir, 'logs', 'board.jsonl'),
+    process.env.AW_BOARD_SNAPSHOT || path.join(runtimeDir, 'board.json'),
+    (row) => log.note(row)
+  );
+  const playerBuilds = () => {
+    const guard = agents[0] && agents[0].guard;
+    return guard && guard.ledger ? guard.ledger.placed : new Map();
+  };
+  const worldLook = new WorldLook(() => agents, agents[0] ? agents[0].guard : null, playerBuilds);
+  const council = new Council(board, worldLook, {
+    playerBuilds,
+    log: (row) => log.note(row),
+  });
+  const projects = new ProjectService({ board, log: (row) => log.note(row) });
+
+  /** A person's request becomes a project proposal through the
+   *  validator — the same door the council's proposals face. A deny is
+   *  said plainly; an ask on a person's own proposal is answered by
+   *  the asking; the project waits on the board for its owner. */
+  const proposeFromHuman = (kind, from) => {
+    if (board.list().some((p) => p.kind === kind && p.status !== 'abandoned' && p.status !== 'done')) {
+      const there = board.list().find((p) => p.kind === kind && p.status !== 'abandoned');
+      return `${there ? there.title : kind} is already on the board (${there ? there.status : '?'})`;
+    }
+    const proposal = buildProposal(kind, worldLook);
+    if (!proposal) return `I looked, ${from}, and found no ground here for a ${kind.replace('-', ' ')}`;
+    const verdict = validate(proposal, null, {
+      playerBuilds: council.playerBuilds(),
+    });
+    if (verdict.type === 'deny') return `not that one, ${from}: ${verdict.reason}`;
+    const project = board.propose(Object.assign({}, proposal, { proposer: from }));
+    board.validated(project.id, { ...verdict, type: 'allow' }); // the person asked; the ask is answered
+    log.note({ event: 'human_proposed', from, project: project.id, kind });
+    return `on the board, ${from}: ${project.title} — the crew will pick it up`;
+  };
+
+  // The drift pause file, read by the world itself (the reflex already
+  // reads it at its decision seam; a held agent must not route around
+  // the hold through the project service either). Read-only, cached
+  // briefly, and a missing or malformed file is never a pause.
+  const pauseFile = process.env.AW_DRIFT_PAUSE || path.join(runtimeDir, 'drift-pause.json');
+  const pauseState = { at: 0, holds: new Map() };
+  const pauseFor = (name) => {
+    const fs = require('node:fs');
+    const now = Date.now();
+    if (now - pauseState.at > 5000) {
+      pauseState.at = now;
+      pauseState.holds = new Map();
+      try {
+        const doc = JSON.parse(fs.readFileSync(pauseFile, 'utf8'));
+        const clock = now / 1000;
+        for (const [actor, entry] of Object.entries(doc || {})) {
+          if (!entry || typeof entry !== 'object') continue;
+          if (entry.until != null && Number(entry.until) < clock) continue;
+          pauseState.holds.set(actor, entry);
+        }
+      } catch (err) {
+        // No pause was ever invented from a read error.
+      }
+    }
+    return pauseState.holds.get(name) || pauseState.holds.get('world') || null;
+  };
+
+  const shared = { board, world: worldLook, council, projects, proposeFromHuman, pauseFor };
+  for (const agent of agents) agent.shared = shared;
+  council.start();
+
   // The greeting: the scout notices arrivals (that is the job), and any
   // builder greets when the scout is not in. Once per person per ten
   // minutes — a greeting on every reconnect is a doorman, not a
-  // neighbour.
+  // neighbour. The greeting says what the community is working on and
+  // offers a hand in it, because a person who drops in unattended
+  // should learn the work in one line.
   const greeted = new Map();
   const stopArrivals = watchArrivals(agents[0].bot, {
     isHuman: (name) => !isAgent(name) && name !== agents[0].name,
@@ -161,8 +248,9 @@ async function main() {
       greeted.set(name, Date.now());
       const greeter = agents.find((a) => a.role === 'scout') || agents[0];
       greeter.say(
-        `Welcome, ${name}! We're ${agents.map((a) => a.name).join(', ')}. ` +
-          "Say 'help' any time, or try: follow me · gather wood · what are you doing?",
+        `Welcome, ${name}! We're ${agents.map((a) => a.name).join(', ')} — a crew that keeps building this place. ` +
+          `Right now: ${board.headline()}. ` +
+          "Want a hand in it? Say 'help me build', or tell me 'build a farm' / 'plant trees'. 'help' has the rest.",
         { force: true }
       );
     },
@@ -187,6 +275,7 @@ async function main() {
   const shutdown = () => {
     clearInterval(report);
     stopArrivals();
+    council.stop();
     for (const agent of agents) agent.stop();
     log.note({ event: 'world_closed' });
     log.close();

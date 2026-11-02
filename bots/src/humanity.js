@@ -55,6 +55,13 @@ const COMMANDS = [
   { command: 'gather-stone', match: /^gather( some)? stone$/i, route: 'role', role: 'gatherer' },
   { command: 'what-doing', match: /^what\b.{0,30}\bdoing\??\s*$/i, route: 'nearest' },
   { command: 'go-home', match: /^go home$/i, route: 'nearest' },
+  // The community's own door: what the crew is building, and a
+  // person's request becoming a project proposal on the board.
+  { command: 'what-building', match: /^what\b.{0,30}\b(building|growing|planting)\??\s*$/i, route: 'nearest' },
+  { command: 'build-farm', match: /^build( us)?( a)? farm$/i, route: 'nearest' },
+  { command: 'plant-trees', match: /^(plant|replant)( some)? trees?$/i, route: 'nearest' },
+  { command: 'build-shelter', match: /^build( us)?( a)? (shelter|hut|house)$/i, route: 'nearest' },
+  { command: 'build-chest', match: /^build( us)?( a)? chest$/i, route: 'nearest' },
   { command: 'help', match: /^help$/i, route: 'nearest' },
 ];
 
@@ -79,7 +86,7 @@ function parseCommand(text) {
 
 /** The one-page answer to "help", said aloud by whoever heard it. */
 const HELP_LINE =
-  "I can: follow me · stop · come here · gather wood · gather stone · help me build · what are you doing? · go home";
+  "I can: follow me · stop · come here · gather wood · gather stone · help me build · what are you doing? · what are you building? · build a farm · plant trees · build a chest · build a shelter · go home";
 
 // --- the no-grief ledger -----------------------------------------------------
 

@@ -382,6 +382,35 @@ class Agent {
         this.say(`${this.name} is ${doing}`, { force: true });
         return;
       }
+      case 'what-building': {
+        if (Date.now() - this.lastRepliedAt < 15000) return;
+        this.lastRepliedAt = Date.now();
+        const board = this.shared && this.shared.board;
+        this.say(
+          board
+            ? `the community is building: ${board.headline()}`
+            : 'we keep no board yet',
+          { force: true }
+        );
+        return;
+      }
+      case 'build-farm':
+      case 'plant-trees':
+      case 'build-shelter':
+      case 'build-chest': {
+        if (Date.now() - this.lastRepliedAt < 15000) return;
+        this.lastRepliedAt = Date.now();
+        const kinds = {
+          'build-farm': 'farm',
+          'plant-trees': 'replant',
+          'build-shelter': 'shelter',
+          'build-chest': 'depot-chest',
+        };
+        if (!this.shared || !this.shared.proposeFromHuman) return;
+        const answer = this.shared.proposeFromHuman(kinds[command], from);
+        this.say(`${answer}`, { force: true });
+        return;
+      }
       case 'help': {
         if (Date.now() - this.lastRepliedAt < 30000) return;
         this.lastRepliedAt = Date.now();
@@ -435,17 +464,26 @@ class Agent {
     movements.allow1by1towers = false;
     movements.allowParkour = false;
     this.bot.pathfinder.setMovements(movements);
-    if (this.guard) {
-      try {
-        const plain = movements.safeToBreak.bind(movements);
-        movements.safeToBreak = (block) => {
-          if (!plain(block)) return false;
-          if (!block || !block.position) return true;
-          return this.guard.mayDig(block.position).ok;
-        };
-      } catch (err) {
-        // The planner's own rule stands; the api's guard still holds.
-      }
+    // The depth floor, on the road as well as at the workface: the
+    // crew mined itself into pits twice over (Pebble at bedrock for
+    // hours; Kite found at y=32 a day later), and the planner was the
+    // last door still open — a walk "east" would happily dig down
+    // through a cave roof. No path may dig below y=48 — unless the
+    // builder is already deep, when digging is the way *up* and the
+    // floor would trap the very bot it protects.
+    const floorY = 48;
+    const deep = () => this.bot.entity && this.bot.entity.position.y < floorY - 3;
+    try {
+      const plain = movements.safeToBreak.bind(movements);
+      movements.safeToBreak = (block) => {
+        if (!plain(block)) return false;
+        if (!block || !block.position) return true;
+        if (block.position.y < floorY && !deep()) return false;
+        if (this.guard) return this.guard.mayDig(block.position).ok;
+        return true;
+      };
+    } catch (err) {
+      // The planner's own rule stands; the api's guard still holds.
     }
   }
 
@@ -790,6 +828,68 @@ class Agent {
       }
     }
     this.ticks += 1;
+
+    // The drift detector's hold (§3.5 soft): this builder waits on its
+    // own safe branch and stops committing — the reflex refuses its
+    // asks already; the project path must not route around the hold.
+    // A person's duty (above) still ranks: a held builder still answers
+    // a person, because the promises in PLAY.md outrank the detector.
+    if (this.shared && this.shared.pauseFor) {
+      const hold = this.shared.pauseFor(this.name);
+      if (hold) {
+        this.interrupt();
+        // Ask the reflex anyway: its refusal is recorded there as a
+        // drift.yield, and a yield is what excuses the wait in the
+        // detector's stall signal. A silent hold looks exactly like a
+        // stall — the first live hold renewed itself on its own
+        // silence (07:58 UTC, "drift signal stall+success") until the
+        // ask came back.
+        //
+        // Once every 30 s, not every tick: the detector's windows are
+        // minutes wide, so a yield every half-minute keeps the window
+        // covered without writing a row per tick to the log of record.
+        const now = Date.now();
+        if (!this._holdAskedAt || now - this._holdAskedAt > 30000) {
+          this._holdAskedAt = now;
+          try {
+            await this.reflex.decide({
+              bot: this.name,
+              role: this.role,
+              context: this.context(),
+              state: this.worldState(),
+            });
+          } catch (err) {
+            // The refusal is the point, not the answer.
+          }
+        }
+        if (!this._holdNotedAt || Date.now() - this._holdNotedAt > 60000) {
+          this._holdNotedAt = Date.now();
+          this.log.note({
+            bot: this.name,
+            event: 'drift_hold',
+            level: hold.level || 'soft',
+            reason: hold.reason || '',
+          });
+        }
+        return;
+      }
+    }
+
+    // The community's own work: a ratified project for this role is
+    // served before the reflex is asked, because the plan — the
+    // council's, ratified by the validator — *is* the decision. The
+    // step runs and is recorded as a play (skill `project.<kind>`,
+    // prediction none: counted on the board, not scored here), so the
+    // ledger sees the world working whether a model was asked or not.
+    if (this.shared && this.shared.projects) {
+      const work = this.shared.projects.service(this);
+      if (work) {
+        this.lastActivity = work.title;
+        await this.play(work, this.context());
+        return;
+      }
+    }
+
     const ctx = this.context();
     let decision;
     try {
@@ -852,7 +952,13 @@ class Agent {
     let result = { done: false, detail: 'the skill did not run' };
     let failure = null;
     try {
-      result = (await this.sandbox.run(decision.body)) || result;
+      // A skill's body is source text the sandbox runs; a project
+      // step's body is a function the projects service built (a plan
+      // walked in the world, recorded as a play like any other).
+      result =
+        typeof decision.body === 'function'
+          ? await decision.body()
+          : (await this.sandbox.run(decision.body)) || result;
     } catch (err) {
       failure = String((err && err.message) || err);
     }
@@ -864,6 +970,16 @@ class Agent {
     const said = result && result.detail ? String(result.detail) : '';
     if (said && outcome.detail && !outcome.detail.includes(said)) {
       outcome.detail = `${outcome.detail} — ${said}`;
+    }
+    // A duty may carry its own result too: a project step that mined,
+    // staged, or delivered material is a won play, whatever the sealed
+    // prediction's default says. The drift detector's success signal
+    // reads exactly these rows, and a crew whose every play scores
+    // 'partial' can never show its baseline a healthy rate (2026-11-02:
+    // the gatherer worked all morning while 20 projects sat at zero).
+    if (!failure && result && (result.result === 'win' || result.result === 'lose')) {
+      outcome.result = result.result;
+      outcome.score = result.result === 'win' ? 1 : 0;
     }
     const wall = (Date.now() - started) / 1000;
 

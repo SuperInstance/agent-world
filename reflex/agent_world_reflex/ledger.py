@@ -52,8 +52,29 @@ def ledger_paths() -> None:
 
 ledger_paths()
 
+from core.night import ledger as _night_ledger  # noqa: E402
 from core.night.ledger import MAX_PAYLOAD_BYTES, SQLiteLedger  # noqa: E402
 from core.records import Actor  # noqa: E402
+
+#: The event types the world writes of its own. The log of record has a
+#: closed set (§1.8) and builder-ide's copy of it does not carry these
+#: three yet; the drift brief's copy of the same shared core does
+#: (``~/lm-wt/drift-pause/core/records.py``, ``DRIFT_EVENT_TYPES``).
+#: The world writes them, so the world's door extends the set for the
+#: types it owns — one list, here, with a pointer to the definition.
+#:
+#: Without this the world's stand-asides were refused by the closed set
+#: with ``ValueError: unknown audit event type: 'drift.yield'``, the
+#: reflex caught it into an invisible field, and the log of record held
+#: no evidence that any agent had ever stood aside. The drift detector
+#: could not tell "could not act" from "chose not to act", so it read
+#: the crew's deliberate wait as a stall and held the same agent again
+#: (2026-11-02, 07:43–08:2x UTC).
+WORLD_EVENT_TYPES = ("drift.yield", "drift.rule_violation", "drift.build_drift")
+
+_night_ledger.EVENT_TYPES = frozenset(
+    set(_night_ledger.EVENT_TYPES) | set(WORLD_EVENT_TYPES)
+)
 
 
 class WorldLedger:

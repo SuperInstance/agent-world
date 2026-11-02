@@ -21,6 +21,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -257,19 +258,34 @@ class ReflexService:
                     item.event.set()
 
     def _record_yield(self, bots: list[str], why: str) -> None:
-        """Write one drift.yield event, or note why it could not be.
+        """Write one drift.yield event, or say loudly that it could not be.
 
         The log must not take the world down; a yield that is not
         recorded is a blind spot in the detector's evidence, not an
         outage, so the failure is named in the service's own error
         field instead of raised through the collector.
+
+        It is also **printed**: the error field is not in the service's
+        ``/stats`` and nobody reads it, so a yield that never reached
+        the log was invisible for an hour and a half (2026-11-02, the
+        closed event set refused ``drift.yield`` and the world kept
+        holding the agent it was holding because of it). A stand-aside
+        that is not recorded is the one failure this service must not
+        make quietly.
         """
         if self.ledger is None:
+            print(
+                f"drift.yield not recorded: no ledger is attached "
+                f"(bots={','.join(bots) or 'none'}; why={why})",
+                file=sys.stderr,
+                flush=True,
+            )
             return
         try:
             self.ledger.yielded(bots, why)
         except Exception as exc:  # pragma: no cover - defensive
             self._last_error = f"yield not recorded: {type(exc).__name__}: {exc}"
+            print(self._last_error, file=sys.stderr, flush=True)
 
     def _answer(self, batch: list[_Pending]) -> None:
         # The admission test: the box's own rule, applied every tick.
@@ -292,7 +308,7 @@ class ReflexService:
                     f"drift pause ({world_pause.get('level', 'tier')}): "
                     f"{world_pause.get('reason', '')}"
                 )
-            self._yielded += 1
+            self._yielded += len(batch)
             self._record_yield([item.bot for item in batch], reason)
             for item in batch:
                 item.error = f"yielded: {reason}"
@@ -311,6 +327,7 @@ class ReflexService:
             # The soft level of §3.5: this agent waits on its own
             # branch and stops committing; the rest of the pack is
             # answered. A held bot is a yield, not a failure.
+            self._yielded += len(held)
             self._record_yield(
                 [item.bot for item in held],
                 f"drift pause (soft): held by the drift detector",

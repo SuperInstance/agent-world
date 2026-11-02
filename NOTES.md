@@ -245,3 +245,193 @@ re-run.
   the tables and the honest limits (carry-on unwitnessed, the depot
   pile race, the deforested spawn, the pit-stranded crew — the
   mediator's list).
+
+
+## 2026-11-02, the community round (Casey 2026-11-01: "leave and have the community developing while you are gone")
+
+- 06:19 UTC — The box was up 4:53 h (load 22–29, another seat's
+  voyager-port sandbox under thor-admit; 88 GB free). Paper, viewer,
+  reflex and the four builders were already running — but **d1 was
+  down**: the reflex's every model call had failed since its start
+  (634/634 at 2.5 ms). `ops/d1.sh start` brought it up on 8094; 29
+  calls later only 2 failures (the race at startup), then clean.
+  TPS 20.0/20.0/20.0, crew + Watcher in the world.
+- Built the community loop, all offline-tested (31 new checks, the
+  full suite 48/48 in 21 s): the **board** (`bots/src/board.js`, an
+  append-only event log `runtime/logs/board.jsonl` replayed into
+  state, snapshot `runtime/board.json`, the manifest fingerprint), the
+  **validator** (`bots/src/validator.js` — a local rule table with
+  builder-ide core/precedent's exact interface, since that repo is not
+  merged here; every project proposal and every structural edit passes
+  it), the **council** (`bots/src/council.js` — deterministic order of
+  need: chest, forest, farm, path, shelter; a DeepInfra model may
+  *propose* when the needs are met, never decide), the **world look**
+  (`bots/src/worldlook.js` — the council's eyes, honest about unloaded
+  chunks) and the **executors** (`bots/src/projects.js` — idempotent
+  plan-walkers per role; the scout tests finished work and files
+  issues; the gatherer supplies materials to sites).
+- The playtest's known failures, fixed at the source: the **depot
+  pile race** (leave_at_depot/take_from_depot now use the depot chest
+  first — placed by the depot-chest project, the council's first
+  need), **depth-minding** (api.dig refuses below y=48 — the planner
+  may still dig upward to escape a pit; skill g14 "surface stone"
+  seeded as gatherer.stone v9, searching y≥50), and the **gone
+  forest** (a replant project: saplings from leaves, planted on the
+  plan; scope 8 spots).
+- Humans: the greeting now says what the community is building
+  (board.headline()) and offers a hand in it; new commands
+  `what are you building?`, `build a farm`, `plant trees`,
+  `build a chest`, `build a shelter` — a person's request becomes a
+  proposal through the same validator (a deny is said plainly).
+
+- 06:41–07:47 UTC — The loop's first live hour, and what it taught:
+  the world held TPS 20.0 while the council proposed, the validator
+  denied, and the crew worked. Six faults found and fixed (commit
+  follows): the blanket keep-out handed a departed visitor's two
+  blocks a veto over the whole depot (site searches exclude that
+  ground now; the coarse deny fires only on a block inside the
+  site; denied kinds cool 30 min); the chest scope floated a block
+  and billed a finished chest; the library gather skills drop
+  everything at the depot so a supply run through them carried
+  nothing (the supply fetch gathers straight into the bag);
+  oak/spruce is one family to a delivery; "mined" is not "holding"
+  (the hillside spruces are a climb the planner refuses — walk
+  first, dig only where you stand, `exclude` the refusals); and the
+  pit still owned all four builders (Pebble y=8, Timber y=48, Kite
+  y=32, Sprout y=64 — lifted by console tp; the pathfinder now holds
+  the y=48 floor too, with an escape clause for a builder already
+  deep).
+- 07:43 UTC — **the drift detector's first live hold**: Pebble's
+  success-rate signal fired, the watcher wrote the soft hold to the
+  pause file, the reflex refused its asks ("paused: drift pause
+  (soft)"), and — once the bots learned to read the pause file too —
+  Pebble held its own work with a `drift_hold` note. The whole of
+  §3.5's soft level, live and unattended.
+- The watchers are detached: `ops/drift-watch.sh` (one window every
+  5 min, soft enforced, tier/hard dry-run) and
+  `ops/community-watch.sh` (a sample a minute into
+  runtime/logs/community-20261102.csv, hourly rollups).
+- An honest correction (DOC-RULES 5): the playtest note's "the
+  deforested spawn" stands for oak — but the world is not woodless;
+  two mature spruces stand 6 blocks from the depot (506 log blocks
+  within 96, probe-wood.js). The first probe read "no wood" by
+  scanning before its chunks settled, and the level-bound search
+  could not see trunks 8 blocks up a hill. Both lessons are in the
+  g15 seed's provenance.
+
+- 09:30 UTC — Picked up mid-diagnosis (the seat stopped with api.js's
+  nearest-first ordering and worldlook's farm-plot ring uncommitted and
+  undeployed). probe-farmland vindicated the look: `farmlandNear`
+  answered **no** honestly (0 farmland in 56 blocks, registry id 208);
+  the farm need was real and the proposal was dying at `farmPlot` —
+  every candidate centre sat on the keep-out ground. Deployed both
+  fixes (suite 50/50 in 21 s): at 09:32:45 the council proposed
+  **b044** with its site on the ring at (-10, 0), the validator
+  allowed it, and the farmer took it up. The ring works.
+- 09:43–09:49 — Pebble, back from the 09:13 soft hold's TTL, hunted
+  blind: "no tree within reach of the depot", every 11 s. The facts
+  (probe-crew-wood.js, new): Pebble/Timber/Kite stand in the depot
+  gully at **y=61–62**; every standing log sits at **y=64–73** (the
+  terraces) with the spruce canopy at y=83–86 — cd0a7f9's
+  `max_y: feet+2` window contained **zero** logs. The community
+  starved on a window. Widened the band to **feet+12** (a terrace or
+  two up, never the canopy; the nearest-first ordering tries the
+  gully-edge logs long before any climb). Suite 50/50.
+- 09:49:06 — before the patched hunt ever ran, the watcher enforced a
+  fresh soft hold on Pebble (success signal, TTL 30 min → lapses
+  10:19). Read the fold to know if the loop converges: a held bot's
+  asks are recorded as **yields, not scored plays** (service.py: "a
+  held bot is a yield, not a failure"), and `partial` steps are
+  unscored — so a hold does not depress the success rate by itself;
+  the pool recovers when real wins return. Watching the 10:19 lapse
+  with the patched hunt behind it.
+
+- 10:26–10:58 — the doom loop named and broken. The watcher held
+  Pebble again at 10:24, one window after the 10:19 TTL lapse — for
+  the silence the 09:49 hold itself had made (the stall lookback is 15
+  min, the TTL 30: a lapsed hold always re-trips). And the fold read
+  again: refusals are yields, not scored plays, so Pebble's pool of
+  wins sat empty all morning — every project play scored 'partial'
+  (predict kind none). Two changes: **the watcher does not enforce a
+  soft hold on an agent that played in the window** (plays or a
+  drift.yield explain it; ops/drift-watch.py, "soft hold not
+  enforced" — live from 10:31), and **a duty may carry its own
+  result** — a supply step that mined, staged, or delivered is a won
+  play (agent.js honors result.result; the hunt and the fetches say
+  win).
+- 10:54–11:19 — the walk itself, dissected with the repo's own
+  gotoNear driven from probes (probe-walkstate.js, probe-path.js):
+  the follower sticks at a 1-up step reporting moving=true with zero
+  displacement until a nudge frees it (a lone probe needed two, then
+  arrived in 13.2 s); the crew's walks died at three nudges. Five
+  now (the wedged-walk test's bound honestly re-measured: ~23 s
+  against a 20 s budget). A dig under way counts as progress in the
+  stall watcher. The hunt's walk aims at dig range (3), not
+  adjacency (2) — a GoalNear(2) into an embedded log searches
+  forever. The refusals are remembered ten minutes (HUNT_MEMORY):
+  the five nearest candidates to the gully floor were three keep-out
+  refusals and two walk failures, re-bought every step, the sixth
+  candidate — the nearest ALLOWED log — never reached.
+- 11:19 — Pebble lifted by console tp to the farm site (-10,70,0):
+  **four spruce logs mined** (result win) — the hunt works from
+  terrace ground. But "mined" was not "held": collectAt gave up when
+  the walk to the block's own cell failed, never chasing the drop
+  (it now breaks to collectEntity). Two logs each went to b037/b044
+  as tosses at 11:26 — and **despawned** (5-min item life) before
+  any owner stepped over them: the board said "staged", the world
+  held nothing. board-unstage.js re-opens a lied-to project; the
+  delivery now walks to distance 1 before the toss; the owners
+  pickup_near their site before waiting.
+- Not yet true: a chest placed, a hoe crafted, a farm planted. The
+  chain that remains: Pebble's walks fail from the gully floor (the
+  restart put it back there; the tp does not survive a restart), and
+  the 5-minute despawn races the owners' 13–45 s project-step
+  cadence — the library gather drops logs in the pile, Timber takes
+  them only if its project step is chosen inside the window. The
+  depot chest (b037) is the fix for its own delivery problem; it has
+  not closed yet.
+
+- 12:13–13:03 — the chain closed, one block at a time. The deliveries
+  kept dying at the toss: the toss landed neither at the site nor the
+  pile (the delivery walk's distance-1 goal exploded like the hunt's
+  distance-2; now distance 2 with a pile fallback, and the outcome
+  says where it landed). Pebble disconnected at two delivery moments
+  (12:13:20, 12:30:04 — "lost connection: Disconnected" in paper.log
+  at exactly the materials events; unexplained, open). Then the sight:
+  **a dropped item is type "other", name "item"** — the kind lives in
+  metadata nobody read (probe-drop-fields.js). Every item look was
+  blind: the pile look never walked its ring, pickup_near saw nothing.
+  Then the bench: "no recipe for chest" — recipesFor needs a crafting
+  table; api.craft finds one within 16, ensureBench crafts and places
+  one when the world has none. Then the wiring: **sendToTest had no
+  caller** — done projects could never reach the scout's walk (done
+  stayed 0 all day for this reason alone, wood aside).
+- 12:47–12:53 — two operator seeds, honestly owed and recorded: the
+  console gave Timber one chest and Sprout two oak logs (the supply
+  chain's despawned tosses had eaten three real deliveries' worth of
+  wood); Timber placed the chest from beside the site (tp -4 68 -5,
+  after six placement timeouts from the gully floor).
+- 13:02:35 → 13:02:59 — **b037 done**: Timber's step said done, the
+  service handed it to the tester, Kite walked it and passed it. The
+  first completed project of the community round, 6.5 h in. The board:
+  done 1, active 1 (b044 farm — Sprout splitting logs for the hoe at
+  12:49; the seeds are its open want). The depot has a chest:
+  leave_at_depot/take_from_depot now have a durable handoff surface.
+
+- 13:10–13:50 — the run settles. The farm (b044) holds the hoe and the
+  bench; Sprout and Pebble grind short_grass for the 14 wheat seeds
+  ("grass broken, no seeds yet", one break ~36 s, a seed an eighth of
+  the time — the honest pace of it). The chest stands at the depot;
+  the board: done 1, active 1. TPS 20.0 every sample of the day
+  (240/240 ≥ 19.5 by the 12:40 rollup), MemAvailable min 69.7 GB,
+  zero soft holds enforced since 10:31 (31 exemptions), grief 0 (the
+  visitor's two blocks stand, no new player builds). The day's doc is
+  docs/playtest-community-2026-11-02.md; the round's commits run
+  14ce3f6 → 6f4134e. Left for the next seat: the gully (walks from
+  its floor still cannot climb out; restarts put the gatherer back),
+  Pebble's delivery-moment disconnects (12:13:20, 12:30:04,
+  unexplained), the farm bill's bench under-count (bills one log, the
+  hoe-and-bench need eight planks), the drift gate's "success rose"
+  semantics, and the replant proposal when the terrace singles run
+  out. The world runs on: paper, bots, reflex, d1, drift-watch,
+  community-watch, all detached.
