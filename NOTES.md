@@ -318,3 +318,30 @@ re-run.
   scanning before its chunks settled, and the level-bound search
   could not see trunks 8 blocks up a hill. Both lessons are in the
   g15 seed's provenance.
+
+- 09:30 UTC — Picked up mid-diagnosis (the seat stopped with api.js's
+  nearest-first ordering and worldlook's farm-plot ring uncommitted and
+  undeployed). probe-farmland vindicated the look: `farmlandNear`
+  answered **no** honestly (0 farmland in 56 blocks, registry id 208);
+  the farm need was real and the proposal was dying at `farmPlot` —
+  every candidate centre sat on the keep-out ground. Deployed both
+  fixes (suite 50/50 in 21 s): at 09:32:45 the council proposed
+  **b044** with its site on the ring at (-10, 0), the validator
+  allowed it, and the farmer took it up. The ring works.
+- 09:43–09:49 — Pebble, back from the 09:13 soft hold's TTL, hunted
+  blind: "no tree within reach of the depot", every 11 s. The facts
+  (probe-crew-wood.js, new): Pebble/Timber/Kite stand in the depot
+  gully at **y=61–62**; every standing log sits at **y=64–73** (the
+  terraces) with the spruce canopy at y=83–86 — cd0a7f9's
+  `max_y: feet+2` window contained **zero** logs. The community
+  starved on a window. Widened the band to **feet+12** (a terrace or
+  two up, never the canopy; the nearest-first ordering tries the
+  gully-edge logs long before any climb). Suite 50/50.
+- 09:49:06 — before the patched hunt ever ran, the watcher enforced a
+  fresh soft hold on Pebble (success signal, TTL 30 min → lapses
+  10:19). Read the fold to know if the loop converges: a held bot's
+  asks are recorded as **yields, not scored plays** (service.py: "a
+  held bot is a yield, not a failure"), and `partial` steps are
+  unscored — so a hold does not depress the success rate by itself;
+  the pool recovers when real wins return. Watching the 10:19 lapse
+  with the patched hunt behind it.
