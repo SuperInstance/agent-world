@@ -389,11 +389,35 @@ async function supplyStep(agent, board) {
     // only a walk that arrives may dig; a tree that will not be walked
     // to is tried no longer. Somebody's neighbour (the no-grief
     // keep-out) is passed by the same door.
+    //
+    // Two rules keep the hunt short, because a long hunt is a long
+    // silence and the detector reads a long silence as a stall:
+    //
+    // * the search looks for wood **at the gatherer's own level**
+    //   (max_y: the feet plus two). A log ten blocks up a hillside is
+    //   found, walked to, and refused — the walk never arrives, and
+    //   each attempt costs the whole walk budget.
+    // * a tree inside somebody's keep-out is **skipped without a
+    //   walk**: the guard knows before the feet move, and the refuse
+    //   is free.
+    const feet = agent.position() || { y: 70 };
     const tried = [];
     for (let look = 0; look < 5; look++) {
-      const log = agent.api.find_block({ names, max_distance: 96, any_level: true, exclude: tried });
+      const log = agent.api.find_block({
+        names,
+        max_distance: 96,
+        any_level: true,
+        max_y: Math.round(feet.y) + 2,
+        exclude: tried,
+      });
       if (!log) return { done: false, detail: 'no tree within reach of the depot' };
       tried.push(`${log.x},${log.y},${log.z}`);
+      // The keep-out, checked before the feet move: a neighbour's
+      // block is never mined, and the refusal costs nothing to learn.
+      const mayDig = agent.guard && agent.guard.mayDig
+        ? agent.guard.mayDig({ x: log.x, y: log.y, z: log.z })
+        : { ok: true };
+      if (!mayDig.ok) continue;
       const walked = await agent.api.move_to(log.x, log.y, log.z);
       if (!walked.ok) continue; // unreachable: the next tree, not the same refusal
       const dug = await agent.api.dig(log.x, log.y, log.z);

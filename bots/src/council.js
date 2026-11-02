@@ -363,7 +363,20 @@ class Council {
         .map((p) => p.owner)
     );
 
-    for (const proposal of needs(this.board, this.world)) {
+    const wanted = needs(this.board, this.world);
+    // The council says what it is thinking. A board that does not move
+    // looks exactly like a board with nothing to do, and the two are
+    // very different: on 2026-11-02 the council proposed nothing for
+    // forty minutes and the log did not say why. One line a minute.
+    this.log({
+      event: 'council_tick',
+      needs: wanted.map((p) => p.kind),
+      busy: Array.from(busy).sort(),
+      proposed: did.proposed.length,
+      abandoned: did.abandoned.length,
+    });
+
+    for (const proposal of wanted) {
       if (busy.has(proposal.owner)) continue;
       // One project of a kind at a time: a need already on the board
       // (in any living status) is being handled, not forgotten.

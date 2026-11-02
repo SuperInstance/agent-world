@@ -60,6 +60,29 @@ function findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY
 }
 
 /**
+ * The items lying on the ground near the depot — the pile the crew's
+ * own gathering leaves there.
+ *
+ * Dropped items are entities: ``type`` "object", the item's name, and
+ * the position where it lies. This asks what is *there* before the
+ * caller walks nine points to find out (see ``take_from_depot``).
+ */
+function groundItemsNear(bot, spot, radius, wanted) {
+  const out = [];
+  const names = new Set(wanted || []);
+  for (const entity of Object.values(bot.entities || {})) {
+    if (!entity || !entity.position) continue;
+    if (entity.type !== 'object' && entity.type !== 'item') continue;
+    const name = entity.name || entity.displayName;
+    if (!name) continue;
+    if (names.size && !names.has(name)) continue;
+    if (Math.hypot(entity.position.x - spot.x, entity.position.z - spot.z) > radius) continue;
+    out.push({ name, x: entity.position.x, y: entity.position.y, z: entity.position.z });
+  }
+  return out;
+}
+
+/**
  * The faces a block may be placed against, in order of preference: on
  * top of the ground first, a wall beside it next, under a ceiling last.
  */
@@ -546,16 +569,44 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
           // No chest, or it would not open: the ground way below.
         }
       }
+      // The pile on the ground: the items lying near the depot, which
+      // the crew's own gathering leaves there. The walk below is
+      // expensive — nine points around the depot, each one a walk that
+      // may fail — and it used to be paid on every call, whether or
+      // not there was anything to pick up. That made a supply run take
+      // 68 to 164 seconds, and a long step is a long silence: the drift
+      // detector read the gatherer's work as a stall and held the very
+      // bot the community was waiting on (2026-11-02, 09:11–09:14 UTC).
+      //
+      // So: look before walking. If nothing of what was asked for lies
+      // on the ground near the depot, say so at once.
+      const pile = groundItemsNear(bot, spot, 8, wanted);
+      if (!pile.length) {
+        return { ok: false, detail: `the depot has no ${wanted.join(', ')}` };
+      }
       // One ring around the depot, walked once: the pickup has no filter,
       // so a single pass collects the whole pile whatever it is, and the
       // first wanted item that appears ends the walk. (Asking once per
       // item made a builder pace the depot for minutes while the
-      // gatherers swept the pile back up behind it.)
+      // gatherers swept the pile back up behind it.) The points that
+      // hold something come first; the rest of the ring is walked only
+      // if the pile is still there.
       const ring = [
         [0, 0], [2, 0], [-2, 0], [0, 2], [0, -2],
         [2, 2], [-2, -2], [2, -2], [-2, 2],
       ];
-      for (const [dx, dz] of ring) {
+      const points = ring
+        .map(([dx, dz]) => ({
+          dx,
+          dz,
+          near: pile.some(
+            (item) =>
+              Math.abs(item.x - (spot.x + dx)) <= 2 &&
+              Math.abs(item.z - (spot.z + dz)) <= 2
+          ),
+        }))
+        .sort((a, b) => (a.near === b.near ? 0 : a.near ? -1 : 1));
+      for (const { dx, dz } of points) {
         try {
           await gotoNear(bot, spot.x + dx, spot.y, spot.z + dz, 1);
         } catch (err) {
