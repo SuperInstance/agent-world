@@ -23,6 +23,13 @@ door is a whitelist, and nothing is published to the internet.
 
 ## How to join
 
+**[PLAY.md](PLAY.md) is the one page for players** — how to join (Java
+and Bedrock), the chat commands the builders obey, what to expect, and
+the measured numbers behind all of it
+([docs/playtest-2026-11-02-playable.md](docs/playtest-2026-11-02-playable.md)).
+The builders greet you, follow you, gather for you, and never touch
+what you place.
+
 ### Minecraft Java (the ProArt, Windows)
 
 1. Open Minecraft (the Java edition) — the launcher, not the
