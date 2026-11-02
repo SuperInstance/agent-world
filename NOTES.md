@@ -631,3 +631,40 @@ re-run.
   firing a doomed placement; b069 rides its stall clock to abandon
   (~20:27Z) and the next proposal recomputes on clear ground
   (0287291). TPS 20.0 throughout; grief 0.
+- 20:29–22:10 — the evening chain, fixed link by link, to the
+  boundary: **(a)** the staged-wood credit outlived the despawned
+  delivery (b044's log staged 11:26Z day two, gone by 11:31; a
+  ten-minute wait re-bills one unit now — c6a21aa, fired 20:29:54Z);
+  **(b)** the wait timer stored on a board-folded project object
+  never aged past one tick (module map now — 363a7ba); **(c)** a dig
+  that paid nothing reported itself a win — the bag is the truth now
+  (e71e9de; Pebble mined five spruce logs for an empty bag
+  20:32–20:44Z, drops falling where the collector cannot stand); **(d)**
+  the first tick after spawn ran the reflex before the crew was wired
+  and dumped the project's bag at the depot pile (idle until shared
+  exists — c817647; this is where every given material kept going);
+  **(e)** a hoe in hand needs 2 planks AND 2 sticks, not 4 planks
+  first (b06df52); **(f)** api.craft opened a bench window from
+  twelve blocks away — walk first (65b8079), inventory recipe first
+  (aaca66e). And the boundary: **the use-on-block packet does not
+  work for mineflayer clients here** — chest opens, table opens, and
+  the hoe's till all time out or land nothing (probe-chest.js ×2,
+  bare-handed; the till 2.4 s per attempt from ON the plot after an
+  operator tp 22:03Z). No farmland has ever existed in this world;
+  the depot chest has never held one item. Dig works, place works,
+  use does not. A clean save-all restart (12:50 local) did not change
+  it. Next-seat work: the use packet on 26.1 (client or server side).
+- Operator debts, the day's full list: 1 seed 20:49Z (swept from the
+  pile by the scout), 1 log + 1 seed 21:02Z (dumped by the startup
+  reflex), 1 log + 1 seed 21:31Z (the planks never split), 1 hoe + 2
+  seeds 21:54Z (the till never lands), 1 tp Sprout to the plot
+  22:03Z. The farm was never hand-built; the number stays the
+  community's.
+- 22:10 — the seat's close-out numbers: TPS 751/752 samples >= 19.5
+  (one 18.7 at the clean restart), grief 0 (six player builds
+  protected), MemAvailable min 34.4 GB, board done 2 / active 2
+  (farm blocked on the use packet; shelter riding its stall clock,
+  the fixed planner re-proposes on clear ground after the abandon).
+  Projects done per hour today: 0 — the day bought nine fixes with
+  their numbers, and named the two blockers. The seven processes run
+  on: paper, reflex, bots, viewer, d1, drift-watch, community-watch.
