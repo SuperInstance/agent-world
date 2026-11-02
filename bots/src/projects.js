@@ -240,6 +240,31 @@ async function growFarm(agent, project) {
       // lying at the site itself, two blocks from the one it was for.
       const pickedHoe = await agent.api.pickup_near(project.site.x, project.site.z, 6);
       if (pickedHoe) return { done: false, detail: `picked up ${pickedHoe} delivered item(s) for the hoe` };
+      // The bill's credit can outlive the wood: a delivery is a toss,
+      // a tossed item skids and despawns in five minutes, and the
+      // staged count still says delivered (b044: 1 log staged
+      // 2026-11-02 11:26, gone by 11:31, the owner "waiting for wood"
+      // for seven hours while the bill believed itself fed). A wait
+      // this long with nothing arriving re-bills one unit — the
+      // gatherer delivers again, and this time the walk arrives (the
+      // ramp stands; the toss lands beside the owner).
+      const waited = project._woodWaitSince || 0;
+      if (!waited) {
+        project._woodWaitSince = Date.now();
+      } else if (Date.now() - waited > 10 * 60 * 1000) {
+        project._woodWaitSince = Date.now();
+        const stagedNow = project.staged || {};
+        if ((stagedNow.oak_log || 0) > 0) {
+          stagedNow.oak_log -= 1;
+          agent.shared.board.stagedMaterials(project.id, stagedNow);
+          agent.log.note({
+            bot: agent.name,
+            event: 'staged_wood_rebilled',
+            project: project.id,
+            detail: 'ten minutes waiting and no wood arrived; one log re-billed',
+          });
+        }
+      }
       await standNear(agent, project.site.x, project.site.y, project.site.z);
       return { done: false, detail: 'waiting at the site for wood (the hoe)' };
     }
