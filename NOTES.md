@@ -580,3 +580,29 @@ re-run.
   the Stone Age advancement) — the loot table itself yields without a
   tool. So the dig path, not the table, loses the drop. Next: inspect
   the pickaxe's components in a live inventory.
+- 18:41–18:52 — **stone drops after all** (the day-3 question, closed):
+  probe-stone-drop.js, three runs. A feet-adjacent pickaxe dig
+  auto-picked 1 cobblestone (0→1); bare hand gave nothing (vanilla);
+  the repeat run left a cobble entity lying at distance 1.0 for 3+ s
+  while the bot stood still — the server's pickup radius is tighter
+  than range-1 collection — and the console confirmed the entity
+  server-side (execute → "COBBLE_ENTITY_THERE", 09:48:22 local).
+  Day two's "stone drops nothing" was instrumentation blindness:
+  digs at reach distance, drops on the ground, nobody walking onto
+  them. collectAt now stands IN the dug cell (dcd3191); the doc
+  carries the Superseded block (§6 and the new §7).
+- 18:52 — the world still had what day two thought spent:
+  probe-woodseed.js reads 40 logs and 40 short_grass within 96 of the
+  depot (8s chunk warm-up first). Day two's forage read before the
+  chunks loaded. No operator debt for the farm bootstrap.
+- 18:56:38 — the crew restarted onto all of day three's code
+  (0b16505): the wheat cycle (tendWheat — ripe-only harvest, replant
+  the same cell, bank the surplus, seed guard on the last stem),
+  safe-keeping (a dig below y=58 banks seeds and the hoe at the chest
+  first; keepInventory untouched — proposed to Casey in the doc
+  instead), and the council's shelter gate on the world's own trunk
+  count. First tick: needs [ramp, farm, shelter]; **b069 "a shelter
+  by the depot" proposed → allow → ratified** (site 6,67,11; 23
+  blocks). All four bots back, staggered 18:56:19–18:56:37Z. Ramp
+  tests 9/9, drift suite 71 passed. The unattended stretch (the
+  headline measurement) starts here.
