@@ -233,3 +233,15 @@ re-run.
   failing honestly from 35+ blocks of rough ground; gather-wood running
   v12 as this is written. The full table and every earlier run's
   numbers are in docs/playtest-2026-11-02-playable.md.
+- 06:0x UTC: the endgame numbers. The grief proof complete under the
+  rule: TestHumanH placed 2 coarse_dirt with Timber working 4 blocks
+  away, the ledger recorded both placements as they landed, and both
+  stood after the watch (2 of 2; an earlier run held 2 of 2 at crew
+  distance 13-35). The steady half hour: 62 samples, TPS 63/63 >= 19.5
+  (min 19.9, median 20.0, reconstructed from paper.log by
+  ops/tps-window.sh), MemAvailable min 78.9 GB, d1 running mean
+  3.7 -> 6.0 ms (single-digit under a person plus my probes, load
+  13-28). The playtest note docs/playtest-2026-11-02-playable.md holds
+  the tables and the honest limits (carry-on unwitnessed, the depot
+  pile race, the deforested spawn, the pit-stranded crew — the
+  mediator's list).
