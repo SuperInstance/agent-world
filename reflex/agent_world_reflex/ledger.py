@@ -10,6 +10,8 @@ writes the options, the Thor learns which ones work.
 | ``tile.played``  | a skill is used, with its outcome |
 | ``tile.retired`` | a skill leaves the eligible set |
 | ``tile.retrained`` | the chooser was refit from the log |
+| ``drift.yield``  | the world stood aside: the admission rule or a drift |
+|                  | pause refused work, and who was told to wait |
 
 The library and the chooser's statistics are **folds over this log**, so
 a restart loses nothing and a replay gives the same answer.
@@ -162,6 +164,25 @@ class WorldLedger:
                 actor=Actor(kind="core", id="chooser", via="refit"),
                 subject={"chooser": summary.get("chooser", "")},
                 payload={"summary": summary},
+            )
+
+    def yielded(self, bots: list[str], why: str) -> None:
+        """Record that the world stood aside, and who was told to wait.
+
+        One event per admission decision, with every bot it covers in
+        the payload. The drift detector folds these per agent so its
+        stall signal can tell "could not act" from "chose not to act"
+        (``docs/design/vibecode-in-world.md`` §3.4); until this event
+        existed the two were the same silence. A pause is a yield too —
+        the soft level of §3.5 is an agent told to hold — and the
+        ``reason`` says which.
+        """
+        with self._write_lock:
+            self._ledger.append(
+                type="drift.yield",
+                actor=Actor(kind="core", id="reflex", via="admission"),
+                subject={"yield": "box-busy"},
+                payload={"reason": why, "bots": list(bots), "count": len(bots)},
             )
 
     # -- the reads ------------------------------------------------------------

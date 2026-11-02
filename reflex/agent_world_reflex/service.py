@@ -96,7 +96,58 @@ def may_act() -> tuple[bool, str]:
         return False, f"the box has {free} GB free; the rule is {FREE_FLOOR_GB} GB"
     return True, ""
 
-__all__ = ["ReflexService", "serve"]
+#: The drift detector's pause file. ``core/drift/pause.py`` (in
+#: builder-ide) writes it; the world only reads it. A file is a door
+#: that needs no process killed and no service restarted — §3.5's
+#: "cheap to undo" — and a missing file, an unreadable file or a
+#: malformed one means **no pause**: the world never invents a pause
+#: out of a read error.
+PAUSE_FILE = Path(
+    os.environ.get(
+        "AW_DRIFT_PAUSE",
+        str(
+            Path(
+                os.environ.get(
+                    "AW_RUNTIME",
+                    str(Path.home() / "lm-wt" / "agent-world" / "runtime"),
+                )
+            ).expanduser()
+            / "drift-pause.json"
+        ),
+    )
+)
+
+
+def drift_pauses() -> dict[str, dict[str, Any]]:
+    """The pause entries in force right now, by actor.
+
+    An entry is ``{"level": "soft"|"tier"|"hard", "reason": str,
+    "until": <epoch or null>}``. An expired entry is not in force —
+    that is the undo: a pause lapses on its own unless renewed. The
+    actor ``"world"`` is the whole world; any other actor is a bot.
+    """
+    try:
+        document = json.loads(PAUSE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(document, dict):
+        return {}
+    now = time.time()
+    in_force: dict[str, dict[str, Any]] = {}
+    for actor, entry in document.items():
+        if not isinstance(entry, dict):
+            continue
+        until = entry.get("until")
+        try:
+            if until is not None and float(until) < now:
+                continue
+        except (TypeError, ValueError):
+            continue
+        in_force[str(actor)] = entry
+    return in_force
+
+
+__all__ = ["ReflexService", "serve", "drift_pauses"]
 
 
 class _Pending:
@@ -205,18 +256,70 @@ class ReflexService:
                     item.error = self._last_error
                     item.event.set()
 
+    def _record_yield(self, bots: list[str], why: str) -> None:
+        """Write one drift.yield event, or note why it could not be.
+
+        The log must not take the world down; a yield that is not
+        recorded is a blind spot in the detector's evidence, not an
+        outage, so the failure is named in the service's own error
+        field instead of raised through the collector.
+        """
+        if self.ledger is None:
+            return
+        try:
+            self.ledger.yielded(bots, why)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._last_error = f"yield not recorded: {type(exc).__name__}: {exc}"
+
     def _answer(self, batch: list[_Pending]) -> None:
         # The admission test: the box's own rule, applied every tick.
         # The world stands aside when the box is full; it carries on
         # when there is room, and it records that another seat is busy.
         allowed, why = may_act()
         self._last_busy = lease_held()
-        if not allowed:
+        pauses = drift_pauses()
+        world_pause = pauses.get("world")
+        if not allowed or world_pause:
+            # The world stands aside: the box's own admission rule, or
+            # the drift detector's tier/hard pause (§3.5). Both are the
+            # same act — the world declines new work politely, nobody
+            # is killed — and both are recorded as a yield, so the
+            # stall signal can tell a deliberate wait from a stall.
+            if not allowed:
+                reason = why
+            else:
+                reason = (
+                    f"drift pause ({world_pause.get('level', 'tier')}): "
+                    f"{world_pause.get('reason', '')}"
+                )
             self._yielded += 1
+            self._record_yield([item.bot for item in batch], reason)
             for item in batch:
-                item.error = f"yielded: {why}"
+                item.error = f"yielded: {reason}"
                 item.event.set()
             return
+        held = []
+        for item in batch:
+            pause = pauses.get(item.bot)
+            if pause is not None:
+                item.error = (
+                    f"paused: drift pause ({pause.get('level', 'soft')}): "
+                    f"{pause.get('reason', '')}"
+                )
+                held.append(item)
+        if held:
+            # The soft level of §3.5: this agent waits on its own
+            # branch and stops committing; the rest of the pack is
+            # answered. A held bot is a yield, not a failure.
+            self._record_yield(
+                [item.bot for item in held],
+                f"drift pause (soft): held by the drift detector",
+            )
+            for item in held:
+                item.event.set()
+            batch = [item for item in batch if item not in held]
+            if not batch:
+                return
 
         # One state, one pack, one call.
         state = batch[0].state or "a Minecraft world with builders at work"
