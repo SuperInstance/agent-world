@@ -396,6 +396,13 @@ async function buildRamp(agent, project) {
   for (let y = block.y + 6; y >= block.y && dug < 8; y--) {
     const there = agent.api.block_at(block.x, y, block.z);
     if (!there || there === 'air' || there === 'cobblestone') continue;
+    // The depot's own surfaces are never carved, whatever a plan says:
+    // the first live ramp plan held the chest's own column as a step
+    // (b058, denied by the validator; this is the belt to those
+    // braces).
+    if (there === 'chest' || there === 'trapped_chest' || there === 'crafting_table') {
+      return { done: false, detail: `the step at ${block.x},${block.y},${block.z} would carve a ${there}` };
+    }
     const out = await agent.api.dig(block.x, y, block.z);
     if (!out.ok) return { done: false, detail: `could not carve the step: ${out.detail}` };
     dug += 1;

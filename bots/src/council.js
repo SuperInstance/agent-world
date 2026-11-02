@@ -196,12 +196,18 @@ function buildProposal(kind, world, extras = {}) {
     // names the cobblestone that finishes it, so the walk out of the
     // gully is one material and one bookkeeping (missingBlocks).
     const blocks = plan.map((s) => ({ name: 'cobblestone', x: s.x, y: s.top, z: s.z }));
+    // The site hugs the plan: a radius ten times wider than the work
+    // drew the departed visitor's rim blocks into the first
+    // proposal's site and the validator denied it (b058).
     const mid = blocks[Math.floor(blocks.length / 2)];
+    const spread = Math.max(
+      ...blocks.map((b) => Math.hypot(b.x - mid.x, b.z - mid.z))
+    );
     return {
       kind,
       title: 'steps out of the depot gully',
       need: 'the floor the crew stands on is a pit; the walks that carry goods die at its rim',
-      site: { x: mid.x, y: mid.y, z: mid.z, r: 10 },
+      site: { x: mid.x, y: mid.y, z: mid.z, r: Math.max(4, Math.ceil(spread)) },
       scope: { blocks },
       materials: { cobblestone: blocks.length },
       owner: 'builder',

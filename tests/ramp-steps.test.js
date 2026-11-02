@@ -20,8 +20,9 @@ const GULLY = new Map([
   ['1,-5', 68],
 ]);
 
-function stubWorld(map) {
+function stubWorld(map, placed) {
   const look = Object.create(WorldLook.prototype);
+  look.keepOut = 8; // the constructor's value (the stub skips it)
   look.surfaceAt = (x, z) => (map.has(`${x},${z}`) ? map.get(`${x},${z}`) : null);
   look.blockAt = (x, y, z) => {
     const top = map.get(`${x},${z}`);
@@ -30,6 +31,7 @@ function stubWorld(map) {
       ? { name: 'stone', boundingBox: 'solid' }
       : { name: 'air', boundingBox: 'empty' };
   };
+  look.playerBuilds = () => placed || new Map();
   return look;
 }
 
@@ -85,5 +87,26 @@ const wall = new Map([['0,0', 62], ['1,0', 70], ['2,0', 70], ['3,0', 70]]);
 const sheer = stubWorld(wall).rampSteps(0, 63, 0, 3, 0);
 check('a sheer wall is honestly unplannable', sheer === null,
   `got ${JSON.stringify(sheer)}`);
+
+// 5. The visitor's rim (TestHumanH's two coarse_dirt, 5,67,2 and
+//    4,66,2, from runtime/logs/player-builds.jsonl): no step may be
+//    planned inside their keep-out, and the chest's own column is
+//    never a step — the first live plan broke both rules and the
+//    validator caught the first (b058, 2026-11-02 14:29 UTC).
+const VISITOR = new Map([['5,67,2', 'coarse_dirt'], ['4,66,2', 'coarse_dirt']]);
+const guarded = stubWorld(FULL, VISITOR);
+const around = guarded.rampSteps(5, 62, 6, -2, -5);
+check('a plan exists around the visitor keep-out', Array.isArray(around) && around.length >= 1,
+  Array.isArray(around) ? `${around.length} steps: ${around.map((s) => `${s.x},${s.z}->${s.top}`).join(' ')}` : 'null');
+if (Array.isArray(around)) {
+  const nearVisitor = around.filter(
+    (s) => Math.hypot(s.x - 5, s.top - 67, s.z - 2) <= 9
+      || Math.hypot(s.x - 4, s.top - 66, s.z - 2) <= 9
+  );
+  check('no step inside the visitor keep-out', nearVisitor.length === 0,
+    nearVisitor.map((s) => `${s.x},${s.z}`).join(' '));
+  const carvesChest = around.some((s) => s.x === -2 && s.z === -5);
+  check("the chest's own column is never a step", !carvesChest);
+}
 
 process.exit(failed);

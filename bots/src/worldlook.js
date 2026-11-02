@@ -151,10 +151,19 @@ class WorldLook {
     // Later passes re-walk the cells tallest-first, because a dip on
     // the line can undo a gain and the wall's own cells are the
     // steps: each carved cell gives one block of standing, once.
-    const ring = [[0, 1], [1, 0], [0, -1], [-1, 0]].map(([dx, dz]) => [x1 + dx, z1 + dz]);
+    const ring = [
+      [0, 1], [1, 0], [0, -1], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1],
+    ].map(([dx, dz]) => [x1 + dx, z1 + dz]);
     const cells = [];
-    for (let s = 1; s <= line; s++) {
-      cells.push([Math.round(x0 + ((x1 - x0) * s) / line), Math.round(z0 + ((z1 - z0) * s) / line)]);
+    for (let s = 1; s < Math.max(1, line); s++) {
+      const x = Math.round(x0 + ((x1 - x0) * s) / line);
+      const z = Math.round(z0 + ((z1 - z0) * s) / line);
+      // The goal's own column is never a step: carved down to a
+      // standing level it would be the chest itself, dug out of its
+      // terrace (the first live plan had exactly that cell in it,
+      // caught only by the validator's deny, b058).
+      if (x === x1 && z === z1) continue;
+      cells.push([x, z]);
     }
     cells.push(...ring);
     const inPlan = new Set();
@@ -170,6 +179,14 @@ class WorldLook {
       for (const [x, z] of order) {
         if (feet >= goal) break;
         if (inPlan.has(`${x},${z}`)) continue;
+        // A person's build keep-out is refused ground, not unknown
+        // ground: the cell is skipped (the plan routes around it), and
+        // if what remains cannot climb, the refusal is honest. The
+        // first live proposal learned this: TestHumanH's two blocks
+        // stand on the gully's east rim, and the validator denied a
+        // ramp whose first steps walked through them (b058, 2026-11-02
+        // 14:29 UTC).
+        if (this._nearPlayerBuild(x, feet, z)) continue;
         const step = walk(x, z, feet);
         if (step === null) {
           if (pass === 0) return null; // unknown ground: no honest scope
