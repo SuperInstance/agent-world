@@ -417,3 +417,21 @@ re-run.
   done 1, active 1 (b044 farm — Sprout splitting logs for the hoe at
   12:49; the seeds are its open want). The depot has a chest:
   leave_at_depot/take_from_depot now have a durable handoff surface.
+
+- 13:10–13:50 — the run settles. The farm (b044) holds the hoe and the
+  bench; Sprout and Pebble grind short_grass for the 14 wheat seeds
+  ("grass broken, no seeds yet", one break ~36 s, a seed an eighth of
+  the time — the honest pace of it). The chest stands at the depot;
+  the board: done 1, active 1. TPS 20.0 every sample of the day
+  (240/240 ≥ 19.5 by the 12:40 rollup), MemAvailable min 69.7 GB,
+  zero soft holds enforced since 10:31 (31 exemptions), grief 0 (the
+  visitor's two blocks stand, no new player builds). The day's doc is
+  docs/playtest-community-2026-11-02.md; the round's commits run
+  14ce3f6 → 6f4134e. Left for the next seat: the gully (walks from
+  its floor still cannot climb out; restarts put the gatherer back),
+  Pebble's delivery-moment disconnects (12:13:20, 12:30:04,
+  unexplained), the farm bill's bench under-count (bills one log, the
+  hoe-and-bench need eight planks), the drift gate's "success rose"
+  semantics, and the replant proposal when the terrace singles run
+  out. The world runs on: paper, bots, reflex, d1, drift-watch,
+  community-watch, all detached.

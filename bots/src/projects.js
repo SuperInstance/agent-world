@@ -228,7 +228,10 @@ async function growFarm(agent, project) {
   }
 
   if (wheat.length && agent.api.inventory_count('wheat_seeds') < 1) {
-    const grass = agent.api.find_block({ names: ['tall_grass', 'grass'], max_distance: 24 });
+    const grass = agent.api.find_block({
+      names: ['short_grass', 'tall_grass', 'grass', 'fern'],
+      max_distance: 32,
+    });
     if (grass) {
       await agent.api.dig(grass.x, grass.y, grass.z);
       if (agent.api.inventory_count('wheat_seeds') > 0) {
@@ -602,7 +605,15 @@ async function supplyStep(agent, board) {
     return { done: false, detail: 'no leaves for saplings nearby' };
   }
   if (want.name === 'wheat_seeds') {
-    const grass = agent.api.find_block({ names: ['tall_grass', 'grass'], max_distance: 24 });
+    // short_grass is this version's seed-bearing plant: "grass" is not
+    // in the registry and tall_grass grows two tall only in lush
+    // places (the one within 96 of the depot stands 30 blocks DOWN, at
+    // y43 — probe, 2026-11-02). The terrace by the farm is covered in
+    // short_grass and fern.
+    const grass = agent.api.find_block({
+      names: ['short_grass', 'tall_grass', 'grass', 'fern'],
+      max_distance: 32,
+    });
     if (grass) {
       const dug = await agent.api.dig(grass.x, grass.y, grass.z);
       return { done: false, result: dug.ok ? 'win' : undefined, detail: dug.detail };
