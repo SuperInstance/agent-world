@@ -382,6 +382,35 @@ class Agent {
         this.say(`${this.name} is ${doing}`, { force: true });
         return;
       }
+      case 'what-building': {
+        if (Date.now() - this.lastRepliedAt < 15000) return;
+        this.lastRepliedAt = Date.now();
+        const board = this.shared && this.shared.board;
+        this.say(
+          board
+            ? `the community is building: ${board.headline()}`
+            : 'we keep no board yet',
+          { force: true }
+        );
+        return;
+      }
+      case 'build-farm':
+      case 'plant-trees':
+      case 'build-shelter':
+      case 'build-chest': {
+        if (Date.now() - this.lastRepliedAt < 15000) return;
+        this.lastRepliedAt = Date.now();
+        const kinds = {
+          'build-farm': 'farm',
+          'plant-trees': 'replant',
+          'build-shelter': 'shelter',
+          'build-chest': 'depot-chest',
+        };
+        if (!this.shared || !this.shared.proposeFromHuman) return;
+        const answer = this.shared.proposeFromHuman(kinds[command], from);
+        this.say(`${answer}`, { force: true });
+        return;
+      }
       case 'help': {
         if (Date.now() - this.lastRepliedAt < 30000) return;
         this.lastRepliedAt = Date.now();
@@ -790,6 +819,22 @@ class Agent {
       }
     }
     this.ticks += 1;
+
+    // The community's own work: a ratified project for this role is
+    // served before the reflex is asked, because the plan — the
+    // council's, ratified by the validator — *is* the decision. The
+    // step runs and is recorded as a play (skill `project.<kind>`,
+    // prediction none: counted on the board, not scored here), so the
+    // ledger sees the world working whether a model was asked or not.
+    if (this.shared && this.shared.projects) {
+      const work = this.shared.projects.service(this);
+      if (work) {
+        this.lastActivity = work.title;
+        await this.play(work, this.context());
+        return;
+      }
+    }
+
     const ctx = this.context();
     let decision;
     try {
@@ -852,7 +897,13 @@ class Agent {
     let result = { done: false, detail: 'the skill did not run' };
     let failure = null;
     try {
-      result = (await this.sandbox.run(decision.body)) || result;
+      // A skill's body is source text the sandbox runs; a project
+      // step's body is a function the projects service built (a plan
+      // walked in the world, recorded as a play like any other).
+      result =
+        typeof decision.body === 'function'
+          ? await decision.body()
+          : (await this.sandbox.run(decision.body)) || result;
     } catch (err) {
       failure = String((err && err.message) || err);
     }

@@ -245,3 +245,41 @@ re-run.
   the tables and the honest limits (carry-on unwitnessed, the depot
   pile race, the deforested spawn, the pit-stranded crew — the
   mediator's list).
+
+
+## 2026-11-02, the community round (Casey 2026-11-01: "leave and have the community developing while you are gone")
+
+- 06:19 UTC — The box was up 4:53 h (load 22–29, another seat's
+  voyager-port sandbox under thor-admit; 88 GB free). Paper, viewer,
+  reflex and the four builders were already running — but **d1 was
+  down**: the reflex's every model call had failed since its start
+  (634/634 at 2.5 ms). `ops/d1.sh start` brought it up on 8094; 29
+  calls later only 2 failures (the race at startup), then clean.
+  TPS 20.0/20.0/20.0, crew + Watcher in the world.
+- Built the community loop, all offline-tested (31 new checks, the
+  full suite 48/48 in 21 s): the **board** (`bots/src/board.js`, an
+  append-only event log `runtime/logs/board.jsonl` replayed into
+  state, snapshot `runtime/board.json`, the manifest fingerprint), the
+  **validator** (`bots/src/validator.js` — a local rule table with
+  builder-ide core/precedent's exact interface, since that repo is not
+  merged here; every project proposal and every structural edit passes
+  it), the **council** (`bots/src/council.js` — deterministic order of
+  need: chest, forest, farm, path, shelter; a DeepInfra model may
+  *propose* when the needs are met, never decide), the **world look**
+  (`bots/src/worldlook.js` — the council's eyes, honest about unloaded
+  chunks) and the **executors** (`bots/src/projects.js` — idempotent
+  plan-walkers per role; the scout tests finished work and files
+  issues; the gatherer supplies materials to sites).
+- The playtest's known failures, fixed at the source: the **depot
+  pile race** (leave_at_depot/take_from_depot now use the depot chest
+  first — placed by the depot-chest project, the council's first
+  need), **depth-minding** (api.dig refuses below y=48 — the planner
+  may still dig upward to escape a pit; skill g14 "surface stone"
+  seeded as gatherer.stone v9, searching y≥50), and the **gone
+  forest** (a replant project: saplings from leaves, planted on the
+  plan; scope 8 spots).
+- Humans: the greeting now says what the community is building
+  (board.headline()) and offers a hand in it; new commands
+  `what are you building?`, `build a farm`, `plant trees`,
+  `build a chest`, `build a shelter` — a person's request becomes a
+  proposal through the same validator (a deny is said plainly).

@@ -40,7 +40,7 @@ const TICK_MS = 50; // a Minecraft tick is 1/20 s
  * and the level filter — a block the builder cannot reach is not a
  * block it can work on — is applied to the results.
  */
-function findByIds(bot, registry, names, maxDistance, feet, anyLevel) {
+function findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY) {
   const ids = [];
   for (const name of names) {
     const block = registry.blocksByName[name];
@@ -49,6 +49,8 @@ function findByIds(bot, registry, names, maxDistance, feet, anyLevel) {
   const spots = bot.findBlocks({ matching: ids, maxDistance, count: 96 });
   for (const spot of spots) {
     if (!anyLevel && Math.abs(spot.y - feet.y) > 2) continue;
+    if (minY != null && spot.y < minY) continue;
+    if (maxY != null && spot.y > maxY) continue;
     const block = bot.blockAt(spot);
     if (block) return block;
   }
@@ -373,9 +375,13 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       // reach. So the candidates are the ones at the builder's own
       // level, unless the query asks for any level.
       const anyLevel = q.any_level === true;
+      // A search may bound itself in the world: min_y / max_y. The
+      // depth-minding searches use it (surface stone, not bedrock).
+      const minY = Number.isFinite(q.min_y) ? q.min_y : null;
+      const maxY = Number.isFinite(q.max_y) ? q.max_y : null;
       let found = null;
       if (names) {
-        found = findByIds(bot, registry, names, maxDistance, feet, anyLevel);
+        found = findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY);
       } else {
         // Any block at all: the name-less search keeps the function
         // matcher, which scans the neighbourhood itself.
@@ -383,6 +389,8 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
           matching: (block) => {
             if (!block || !block.position) return false;
             if (block.name === 'air') return false;
+            if (minY != null && block.position.y < minY) return false;
+            if (maxY != null && block.position.y > maxY) return false;
             if (anyLevel) return true;
             return Math.abs(block.position.y - feet.y) <= 2;
           },
@@ -406,6 +414,47 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
     },
     leave_at_depot: async (name, count) => {
       const spot = depotSpot(bot);
+      // The chest first. A pile on the ground is a race: whichever
+      // builder (or watcher) walks the depot sweeps it up, and goods
+      // placed there were "delivered" and gone in the same minute (the
+      // playtest's own finding). A chest the world placed — never a
+      // person's — holds the delivery for whoever it was for.
+      const chest = findByIds(bot, registry, ['chest'], 12, spot, true);
+      if (chest && !guard.isPlayerChest(chest.position)) {
+        try {
+          await gotoNear(bot, chest.position.x, chest.position.y, chest.position.z, 1);
+          if (openChest) {
+            openChest.close();
+            openChest = null;
+          }
+          const container = await bot.openContainer(chest);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          let put = 0;
+          const items = name
+            ? bot.inventory.items().filter((i) => i.name === name)
+            : bot.inventory.items();
+          for (const item of items) {
+            const wanted = name ? Math.min(Number(count) || item.count, item.count) : item.count;
+            try {
+              await container.deposit(item.type, null, wanted);
+              put += 1;
+            } catch (err) {
+              // The chest can be full; the rest go back to the pile way.
+            }
+          }
+          try {
+            container.close();
+          } catch (err) {
+            // Already closed.
+          }
+          if (put) {
+            await gotoNear(bot, spot.x, spot.y, spot.z + 3, 1, 5000).catch(() => {});
+            return { ok: true, detail: `left ${put} stack(s) in the depot chest` };
+          }
+        } catch (err) {
+          // The chest would not open: the pile way below still works.
+        }
+      }
       try {
         await gotoNear(bot, spot.x, spot.y, spot.z, 0);
       } catch (err) {
@@ -452,6 +501,44 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       if (!wanted.length) return { ok: false, detail: 'nothing was asked for' };
       const spot = depotSpot(bot);
       const before = new Map(wanted.map((n) => [n, bot.inventory.count(n, null)]));
+      // The chest first, the same chest leave_at_depot fills: a
+      // delivery that went into the chest is taken from the chest, not
+      // hunted on the ground where another builder may already carry it
+      // away.
+      const chest = findByIds(bot, registry, ['chest'], 12, spot, true);
+      if (chest && !guard.isPlayerChest(chest.position)) {
+        try {
+          await gotoNear(bot, chest.position.x, chest.position.y, chest.position.z, 1);
+          if (openChest) {
+            openChest.close();
+            openChest = null;
+          }
+          const container = await bot.openContainer(chest);
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          const held = container.containerItems();
+          let taken = null;
+          for (const name of wanted) {
+            const there = held.filter((i) => i.name === name);
+            if (!there.length) continue;
+            const count = there.reduce((s, i) => s + i.count, 0);
+            try {
+              await container.withdraw(there[0].type, null, count);
+              taken = { ok: true, name, count, detail: `took ${count} ${name} from the depot chest` };
+              break;
+            } catch (err) {
+              // This one would not leave the chest; the next name may.
+            }
+          }
+          try {
+            container.close();
+          } catch (err) {
+            // Already closed.
+          }
+          if (taken) return taken;
+        } catch (err) {
+          // No chest, or it would not open: the ground way below.
+        }
+      }
       // One ring around the depot, walked once: the pickup has no filter,
       // so a single pass collects the whole pile whatever it is, and the
       // first wanted item that appears ends the walk. (Asking once per
@@ -507,6 +594,20 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       if (!block) return { ok: false, detail: 'there is no block there' };
       if (block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') {
         return { ok: false, detail: 'there is nothing to mine there' };
+      }
+      // The depth floor. Through the playable round the crew mined
+      // itself to bedrock and spent hours there (Pebble, 72 below the
+      // depot, docs/playtest-2026-11-02-playable.md) — the nearest stone
+      // is down, and a gatherer with no floor under its search digs its
+      // own trap. No skill mines below y=48: the quarry rim and the
+      // hillsides carry all the stone a path needs. The planner is not
+      // bound by this (a walk out of a pit digs upward through blocks
+      // above the floor) — this is the workface's rule, not the road's.
+      if (block.position.y < 48) {
+        return {
+          ok: false,
+          detail: 'too deep: the community mines no lower than y=48 — look on the hillsides',
+        };
       }
       // A person's block is never mined, however good it looks. This is
       // the workface of the no-grief rule: every skill digs through
