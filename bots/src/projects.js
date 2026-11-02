@@ -197,9 +197,16 @@ async function gatherSeeds(agent, wanted, { seconds = 90, reach = 48 } = {}) {
   const deadline = Date.now() + seconds * 1000;
   let broken = 0;
   while (agent.api.inventory_count('wheat_seeds') < wanted && Date.now() < deadline) {
+    // any_level: the grass stands a terrace up from the walker. The
+    // level-banded default read "no seed grass within reach" from the
+    // pit floor (Pebble y64, the patch at y71 — twelve blocks away
+    // horizontally, 2026-11-02 19:07Z) while forty stems stood within
+    // 96; it is the wood hunt's gully blindness again, on the seed
+    // path.
     const grass = agent.api.find_block({
       names: ['short_grass', 'tall_grass', 'grass', 'fern'],
       max_distance: reach,
+      any_level: true,
     });
     if (!grass) break;
     const dug = await agent.api.dig(grass.x, grass.y, grass.z);
@@ -423,6 +430,23 @@ async function buildPlanned(agent, project) {
 
   const block = missing.find((b) => b.name === name);
   await standNear(agent, block.x, block.y, block.z);
+  // The plan meets the world: a trunk or a boulder may stand in a
+  // planned cell (the shelter's first wall cell held a spruce_log —
+  // surfaceAt reads the ground, not the trunk growing on it,
+  // b069/2026-11-02 19:06Z: "there is already a spruce_log there",
+  // a spin a stall clock would have paid for with the whole project).
+  // The builder clears what the guard allows, and the clearing pays:
+  // the trunk becomes the planks the roof asked for.
+  const occupant = agent.api.block_at(block.x, block.y, block.z);
+  if (
+    occupant && occupant !== 'air' && occupant !== 'cave_air'
+    && occupant !== 'void_air' && occupant !== name
+  ) {
+    const cleared = await agent.api.dig(block.x, block.y, block.z);
+    if (!cleared.ok) {
+      return { done: false, detail: `the cell holds ${occupant}: ${cleared.detail}` };
+    }
+  }
   const placed = await projectPlace(agent, project, name, block.x, block.y, block.z);
   if (placed.ok && !missingBlocks(agent, project).length) {
     agent.say(`${project.title} is up`);
@@ -803,7 +827,15 @@ async function supplyStep(agent, board) {
     // broken" every tick, and nothing left within 96 either).
     const run = await gatherSeeds(agent, want.count, { reach: 160, seconds: 150 });
     if (run.broken === 0) {
-      return { done: false, detail: 'no seed grass within reach' };
+      // An empty forage backs off: the play is the gatherer's whole
+      // tick, and a find that returns in fifty milliseconds re-issues
+      // every two seconds for as long as the bill stands (the seed
+      // spin, 2026-11-02 — thirty instant plays a minute, each
+      // "no seed grass within reach"). The wait is the walk the run
+      // did not take; grass regrows and the farmer may deliver seeds
+      // of its own in the meantime.
+      await new Promise((resolve) => setTimeout(resolve, 45000));
+      return { done: false, detail: 'no seed grass within reach — backing off a minute' };
     }
     return {
       done: false,
