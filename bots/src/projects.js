@@ -75,6 +75,42 @@ async function standNear(agent, x, y, z) {
 
 // --- the executors --------------------------------------------------------------
 
+/** A bench for the 3x3 crafts, placed at the site's edge when the
+ *  world has none (four planks, the no-grief guard holding). The bench
+ *  is the community's own tool, not a project block — the scope does
+ *  not name it, and the crafts it unlocks are the project's whole
+ *  point (2026-11-02: "there is no recipe for chest" while Timber
+ *  held eight planks). */
+async function ensureBench(agent) {
+  const have = agent.api.find_block({ names: ['crafting_table'], max_distance: 16 });
+  if (have) return { ok: true, detail: 'a bench is near' };
+  if (agent.api.inventory_count('crafting_table') < 1) {
+    if (agent.api.inventory_count('oak_planks') < 4) {
+      return { ok: false, detail: 'no bench for the craft, and fewer than 4 planks' };
+    }
+    const made = await agent.api.craft('crafting_table', 1);
+    if (!made.ok) return { ok: false, detail: `no bench: ${made.detail}` };
+  }
+  const feet = agent.position();
+  if (!feet) return { ok: false, detail: 'no bench: nowhere to stand one' };
+  const { Vec3 } = require('vec3');
+  for (let r = 1; r <= 3; r += 1) {
+    for (const [dx, dz] of [[r, 0], [-r, 0], [0, r], [0, -r], [r, r], [-r, -r], [r, -r], [-r, r]]) {
+      const x = Math.floor(feet.x) + dx;
+      const z = Math.floor(feet.z) + dz;
+      for (let y = Math.floor(feet.y) + 1; y >= Math.floor(feet.y) - 2; y -= 1) {
+        const at = agent.bot.blockAt(new Vec3(x, y, z));
+        const below = agent.bot.blockAt(new Vec3(x, y - 1, z));
+        if (!at || !below) continue;
+        if (at.name !== 'air' || below.name === 'air') continue;
+        const placed = await agent.api.place('crafting_table', x, y, z);
+        if (placed.ok) return { ok: true, detail: `placed a bench at ${x},${y},${z}` };
+      }
+    }
+  }
+  return { ok: false, detail: 'no bench: no open ground beside the builder' };
+}
+
 /** depot-chest: craft the chest (from staged logs), place it. */
 async function buildDepotChest(agent, project) {
   const missing = missingBlocks(agent, project);
@@ -98,6 +134,8 @@ async function buildDepotChest(agent, project) {
       await standNear(agent, block.x, block.y, block.z);
       return { done: false, detail: 'waiting at the site for wood' };
     }
+    const bench = await ensureBench(agent);
+    if (!bench.ok) return { done: false, detail: bench.detail };
     const crafted = await agent.api.craft('chest', 1);
     if (!crafted.ok) return { done: false, detail: crafted.detail };
     return { done: false, detail: 'crafted the chest' };
@@ -182,6 +220,8 @@ async function growFarm(agent, project) {
       if (!crafted.ok) return { done: false, detail: `no sticks for the hoe: ${crafted.detail}` };
       return { done: false, detail: 'split planks for the sticks' };
     }
+    const bench = await ensureBench(agent);
+    if (!bench.ok) return { done: false, detail: bench.detail };
     const crafted = await agent.api.craft('wooden_hoe', 1);
     if (!crafted.ok) return { done: false, detail: crafted.detail };
     return { done: false, detail: 'crafted the hoe' };
@@ -363,9 +403,25 @@ async function supplyStep(agent, board) {
     // and despawns five minutes later, and the board keeps saying
     // "staged" for wood the world no longer holds (2026-11-02, b037:
     // two logs staged at 11:26, gone by 11:31, Timber waiting still).
-    // The walk is best effort: the toss happens from wherever the feet
-    // managed to get.
-    await agent.api.move_to(project.site.x, project.site.y, project.site.z, 1).catch(() => {});
+    // The walk is best effort — and if the site cannot be walked to
+    // (the gully rim), the goods go to the depot pile instead: the
+    // owner's take_from_depot walks that ring, and a pile the owner
+    // reads beats a toss into the wild.
+    // Distance two, not one: an adjacency goal into the gully rim
+    // searches forever, and the walk that never concludes is how the
+    // morning's deliveries landed wherever the gatherer happened to
+    // stand (b037's wood was never at the site NOR the pile — probe
+    // eyes saw both, empty, four seconds before despawn).
+    let tossWhere = 'the site';
+    const walkedIn = await agent.api
+      .move_to(project.site.x, project.site.y, project.site.z, 2);
+    if (!walkedIn.ok) {
+      const home = agent.api.depot();
+      const walkedHome = await agent.api.move_to(home.x + 2, home.y, home.z + 2, 2);
+      tossWhere = walkedHome.ok ? 'the depot pile' : 'where the gatherer stands';
+    }
+    const from = agent.position();
+    if (from) tossWhere += ` (${Math.round(from.x)},${Math.round(from.y)},${Math.round(from.z)})`;
     const item = agent.bot.inventory.items().find((i) => familyOf(want.name).includes(i.name));
     if (!item) return { done: false, detail: `the ${want.name} left the bag` };
     try {
@@ -377,7 +433,11 @@ async function supplyStep(agent, board) {
     staged[want.name] = (staged[want.name] || 0) + delivered;
     board.stagedMaterials(project.id, staged);
     agent.say(`${delivered} ${want.name.replace(/_/g, ' ')} for ${project.title}`);
-    return { done: false, result: 'win', detail: `delivered ${delivered} ${want.name} to ${project.id}` };
+    return {
+      done: false,
+      result: 'win',
+      detail: `delivered ${delivered} ${want.name} to ${project.id}, tossed at ${tossWhere}`,
+    };
   }
 
   // Fetch. The gather is direct — into the bag, not through the
@@ -481,24 +541,25 @@ async function supplyStep(agent, board) {
         refused(key, `(${log.x},${log.y},${log.z}) ${mayDig.why}`);
         continue;
       }
-      // The walk aims at DIG RANGE (three blocks), not adjacency: a
-      // log embedded in a gully wall has no standable cell within two,
-      // and the planner's search for one explodes instead of concluding
-      // (2026-11-02: path[0] empty for 14 s, every walk "could not
-      // start", while the gully floor stood open). Standing three from
-      // the trunk is what a lumberjack actually needs.
+      // Dig directly — the library's own gather skill does, and it is
+      // the one way wood has actually moved all day (11:36: "found a
+      // tree at its own level, mined a log", from the same gully floor
+      // where the hunt's separate walk failed every candidate).
+      // api.dig's approach walks the last steps best effort (12 s,
+      // forgiving of distance), the guard still rules inside the dig,
+      // and collectAt chases the drop. A strict walk-first was the
+      // morning's whole failure surface: the follower sticks at the
+      // gully's 1-up steps and the hunt read "unreachable" for trees
+      // standing at the gatherer's own level.
       walks += 1;
-      const walked = await agent.api.move_to(log.x, log.y, log.z, 3);
-      if (!walked.ok) { // unreachable: the next tree, not the same refusal
-        refused(key, `(${log.x},${log.y},${log.z}) walk: ${walked.detail}`);
-        continue;
-      }
       const dug = await agent.api.dig(log.x, log.y, log.z);
       if (dug.ok) {
         HUNT_MEMORY.delete(key);
         return { done: false, result: 'win', detail: dug.detail };
       }
-      if (!dug.detail.includes('not mining')) return { done: false, detail: dug.detail };
+      if (!dug.detail.includes('not mining') && !dug.detail.includes('too deep')) {
+        return { done: false, detail: dug.detail };
+      }
       refused(key, `(${log.x},${log.y},${log.z}) dig: ${dug.detail}`);
     }
     return {
@@ -605,7 +666,20 @@ class ProjectService {
           title: project.title,
           reason: 'project:' + project.id,
           predict: { kind: 'none' },
-          body: () => executor(agent, project),
+          body: async () => {
+            const result = await executor(agent, project);
+            // The hand to the tester: an owner whose plan stands sends
+            // the project to the scout's walk. Nothing ever called
+            // sendToTest (2026-11-02: "the chest stands" said twenty
+            // times over while the board waited for a test that could
+            // never be scheduled — done stayed 0 all day).
+            const fresh = this.board.get(project.id);
+            if (result && result.done && fresh && fresh.status === 'active') {
+              this.board.sendToTest(project.id);
+              agent.say(`${project.title} looks done — Kite, walk it`);
+            }
+            return result;
+          },
         };
       }
       this.log({

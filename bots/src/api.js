@@ -80,15 +80,19 @@ function findByIds(bot, registry, names, maxDistance, feet, anyLevel, minY, maxY
  */
 function groundItemsNear(bot, spot, radius, wanted) {
   const out = [];
-  const names = new Set(wanted || []);
   for (const entity of Object.values(bot.entities || {})) {
     if (!entity || !entity.position) continue;
-    if (entity.type !== 'object' && entity.type !== 'item') continue;
-    const name = entity.name || entity.displayName;
-    if (!name) continue;
-    if (names.size && !names.has(name)) continue;
+    // A dropped item is an entity whose type is "other" and whose
+    // name is just "item" — the KIND it carries lives in metadata
+    // this layer does not read (probe-drop-fields.js, 2026-11-02:
+    // type "other", name "item", displayName "Item"). Type-based
+    // looks were blind to every drop ever made: the pile look
+    // declined at once, the ring never walked, and the crew starved
+    // beside its own deliveries. The wanted-list cannot be matched
+    // here — the caller's inventory decides what a walk picked up.
+    if (entity.name !== 'item' && entity.name !== 'Item') continue;
     if (Math.hypot(entity.position.x - spot.x, entity.position.z - spot.z) > radius) continue;
-    out.push({ name, x: entity.position.x, y: entity.position.y, z: entity.position.z });
+    out.push({ name: 'item', x: entity.position.x, y: entity.position.y, z: entity.position.z });
   }
   return out;
 }
@@ -801,10 +805,14 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
      *  (2026-11-02: b037 staged two logs for eleven minutes before
      *  this existed). Returns how many drops were walked over. */
     pickup_near: async (x, z, radius) => {
+      // By TYPE, not name: item entities' `name` is unreliable across
+      // mineflayer versions (probe-stock reads them by type), and a
+      // name filter matched nothing at b037's site on 2026-11-02
+      // while two delivered logs lay in despawn's reach.
       const drops = Object.values(bot.entities).filter((e) => {
         if (!e || !e.position) return false;
-        if (e.name !== 'item' && e.name !== 'Item' && e.name !== 'item_stack') return false;
-        return Math.hypot(e.position.x - x, e.position.z - z) <= (radius || 6);
+        if (e.name !== 'item' && e.name !== 'Item') return false;
+        return Math.hypot(e.position.x - x, e.position.z - z) <= (radius || 8);
       });
       let walked = 0;
       for (const d of drops.slice(0, 4)) {
@@ -832,10 +840,29 @@ function buildApi(bot, counters, guard = OPEN_GUARD) {
       const wanted = count || 1;
       const item = registry.itemsByName[name];
       if (!item) return { ok: false, detail: `there is no item called ${name}` };
-      const recipes = bot.recipesFor(item.id, null, wanted);
-      if (!recipes.length) return { ok: false, detail: `there is no recipe for ${name}` };
+      // A 3x3 recipe needs a bench: chest, hoe — anything three columns
+      // wide. mineflayer's recipesFor takes the table block, and
+      // without one those recipes are simply invisible ("there is no
+      // recipe for chest", 2026-11-02 — the recipe existed; the table
+      // did not). The nearest bench within reach is used; a missing
+      // bench is said plainly so the caller can place one.
+      const tableId = registry.blocksByName['crafting_table']
+        ? registry.blocksByName['crafting_table'].id
+        : null;
+      const tableBlock = tableId
+        ? bot.findBlock({ matching: tableId, maxDistance: 16 })
+        : null;
+      const recipes = bot.recipesFor(item.id, null, wanted, tableBlock || null);
+      if (!recipes.length) {
+        return {
+          ok: false,
+          detail: tableBlock
+            ? `there is no recipe for ${name} even at the bench`
+            : `there is no recipe for ${name} without a crafting table nearby`,
+        };
+      }
       try {
-        await bot.craft(recipes[0], wanted);
+        await bot.craft(recipes[0], wanted, tableBlock || undefined);
         return { ok: true, detail: `crafted ${wanted} ${name}` };
       } catch (err) {
         return { ok: false, detail: String((err && err.message) || err) };
