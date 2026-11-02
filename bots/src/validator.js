@@ -35,6 +35,12 @@
 // the proposal. A rule speaks only when its key is in the proposal's
 // keys — the same protocol as core/precedent, where the caller names
 // the proposal's facets and the validator matches rules by key.
+//
+// What the world can supply is the world's own list, in one place
+// (materials.js), so the validator and the supply duty cannot drift
+// apart again.
+const { isGatherable } = require('./materials');
+
 const RULES = {
   'kind:known': {
     text: 'the community has a builder for this kind of project',
@@ -69,12 +75,13 @@ const RULES = {
   'materials:gatherable': {
     text: 'the world can supply the materials it asks for',
     check: (p) => {
-      const gatherable = new Set([
-        'oak_log', 'oak_planks', 'cobblestone', 'stone', 'dirt',
-        'oak_sapling', 'wheat_seeds', 'chest', 'wooden_hoe', 'stick',
-      ]);
+      // The list is the world's, in one place (materials.js): a bill
+      // names the raw the gatherer can carry, and the owner crafts the
+      // rest. The old list here named crafted things (a wooden_hoe)
+      // that the supply chain could never deliver, so the bill passed
+      // the validator and then starved at the site.
       for (const name of Object.keys(p.materials || {})) {
-        if (!gatherable.has(name)) return 'ask_human';
+        if (!isGatherable(name)) return 'ask_human';
       }
       return null;
     },

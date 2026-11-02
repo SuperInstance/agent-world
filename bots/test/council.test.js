@@ -13,7 +13,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { Board } = require('../src/board');
-const { Council, needs } = require('../src/council');
+const { Council, needs, buildProposal } = require('../src/council');
+const { GATHERABLE_NAMES, isGatherable } = require('../src/materials');
 
 function tmpBoard() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'council-'));
@@ -136,4 +137,62 @@ test('the shelter comes last, after the chest and the forest', async () => {
   // The hut is 23 blocks (a cobble ring two high with a door gap, a
   // plank roof over all nine): well inside the 64-block bound, proved.
   assert.equal(project.scope.blocks.length, 23, `scope was ${project.scope.blocks.length}`);
+});
+
+test('every bill names only what the gatherer can carry', () => {
+  // The validator's "gatherable" set and the supply duty's list were
+  // two lists, and they disagreed: the farm's bill named a
+  // `wooden_hoe`, which the validator approved and the supply chain
+  // could never deliver, so the farm waited at the site for a hoe that
+  // was never coming. One list now (materials.js), and this test is
+  // the proof that the council's bills stay inside it.
+  const world = stubWorld({
+    chest: false,
+    logs: 30,
+    farmland: false,
+    plantSpots: Array.from({ length: 8 }, (_, i) => ({ x: i, y: 70, z: 0 })),
+  });
+  const kinds = [
+    ['depot-chest', {}],
+    ['replant', {}],
+    ['farm', {}],
+    ['path', { to: { x: 10, y: 70, z: 10, title: 'the ridge' } }],
+    ['shelter', {}],
+  ];
+  for (const [kind, extras] of kinds) {
+    const proposal = buildProposal(kind, world, extras);
+    assert.ok(proposal, `${kind} has no proposal`);
+    for (const name of Object.keys(proposal.materials || {})) {
+      assert.ok(
+        isGatherable(name),
+        `the ${kind} bill names ${name}, which the gatherer cannot carry ` +
+          `(deliverable: ${GATHERABLE_NAMES.join(', ')})`,
+      );
+    }
+  }
+});
+
+test('a project that places nothing is given up on', async () => {
+  // The stall-abandon watch only started its clock when a project's
+  // placed count *changed*. A project whose first block never came
+  // therefore never started the clock and was never abandoned: it sat
+  // on the board forever, and its role was busy, so the council could
+  // not move on to anything else.
+  const board = tmpBoard();
+  const council = new Council(board, stubWorld({ chest: false, logs: 30, farmland: true }), {
+    playerBuilds: () => new Map(),
+    log: () => {},
+    stallAbandonMs: 5, // the window, in the test's own time
+  });
+  const did = await council.tick({ allowModel: false });
+  assert.equal(did.proposed.length, 1);
+  const id = did.proposed[0];
+  board.started(id);
+
+  // The first tick that sees the project running starts its clock.
+  await council.tick({ allowModel: false });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const later = await council.tick({ allowModel: false });
+  assert.deepEqual(later.abandoned, [id], `the stuck project was not given up on`);
+  assert.equal(board.get(id).status, 'abandoned');
 });

@@ -25,6 +25,7 @@
 // with the verdict written down. Nothing starts unratified.
 
 const { validate } = require('./validator');
+const { rawBill } = require('./materials');
 
 const DEFAULTS = {
   intervalMs: 60 * 1000, // a council tick every minute
@@ -166,7 +167,10 @@ function buildProposal(kind, world, extras = {}) {
       scope: {
         blocks: plot.blocks.map((b) => ({ name: b.name, x: b.x, y: b.y, z: b.z })),
       },
-      materials: { wooden_hoe: 1, wheat_seeds: plot.blocks.filter((b) => b.name === 'wheat').length },
+      materials: rawBill({
+        wooden_hoe: 1,
+        wheat_seeds: plot.blocks.filter((b) => b.name === 'wheat').length,
+      }),
       owner: 'farmer',
     };
   }
@@ -221,10 +225,10 @@ function buildProposal(kind, world, extras = {}) {
       need: 'a roof over the depot work',
       site: { x: spot.x, y: spot.y, z: spot.z, r: 6 },
       scope: { blocks },
-      materials: {
+      materials: rawBill({
         cobblestone: blocks.filter((b) => b.name === 'cobblestone').length,
         oak_planks: blocks.filter((b) => b.name === 'oak_planks').length,
-      },
+      }),
       owner: 'builder',
     };
   }
@@ -330,11 +334,23 @@ class Council {
         this.lastProgressAt.set(p.id, Date.now());
         continue;
       }
+      // The first sighting of a project that has placed nothing counts
+      // as its first silence. Before this, `lastProgressAt` was never
+      // set for a project whose first block never came, so `since` was
+      // "now" on every tick and the age never grew: a project that
+      // placed nothing was never abandoned (2026-11-02, the farm with
+      // a hoe no one could deliver).
+      if (!this.lastProgressAt.has(p.id)) {
+        this.lastProgressSeen.set(p.id, placed);
+        this.lastProgressAt.set(p.id, Date.now());
+        continue;
+      }
       const since = this.lastProgressAt.get(p.id) || Date.now();
       const age = Date.now() - since;
       if (age > this.opts.stallAbandonMs) {
         this.board.abandon(p.id, `no progress for ${Math.round(age / 60000)} min`);
         this.lastProgressAt.delete(p.id);
+        this.lastProgressSeen.delete(p.id);
         did.abandoned.push(p.id);
       }
     }

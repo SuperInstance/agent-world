@@ -24,6 +24,7 @@
 // gatherer's delivery lands in the builder's bag.
 
 const { checkEdit } = require('./validator');
+const { GATHERABLE_NAMES } = require('./materials');
 
 /** Place one planned block through both doors: scope, then no-grief. */
 async function projectPlace(agent, project, name, x, y, z) {
@@ -151,7 +152,9 @@ async function growFarm(agent, project) {
   const wheat = missing.filter((b) => b.name === 'wheat');
   const farmland = missing.filter((b) => b.name === 'farmland');
 
-  // The materials: a hoe (4 planks), and seeds (from the grass).
+  // The materials: a hoe (2 planks + 2 sticks, so 4 planks and some
+  // sticks), and seeds (from the grass). The bill names logs, not a
+  // hoe: the gatherer carries logs and the owner crafts (2026-11-02).
   if (agent.api.inventory_count('wooden_hoe') < 1 && farmland.length) {
     if (agent.api.inventory_count('oak_planks') < 4) {
       const logs = agent.bot.inventory.items().filter((i) => i.name.endsWith('_log'));
@@ -163,6 +166,13 @@ async function growFarm(agent, project) {
       if (staged && staged.ok) return { done: false, detail: 'took a log for the hoe' };
       await standNear(agent, project.site.x, project.site.y, project.site.z);
       return { done: false, detail: 'waiting at the site for wood (the hoe)' };
+    }
+    // A hoe is 2 planks and 2 sticks: the craft fails without the
+    // sticks, so they are split out of a plank first.
+    if (agent.api.inventory_count('stick') < 2) {
+      const crafted = await agent.api.craft('stick', 2);
+      if (!crafted.ok) return { done: false, detail: `no sticks for the hoe: ${crafted.detail}` };
+      return { done: false, detail: 'split planks for the sticks' };
     }
     const crafted = await agent.api.craft('wooden_hoe', 1);
     if (!crafted.ok) return { done: false, detail: crafted.detail };
@@ -293,11 +303,10 @@ async function testProject(agent, project) {
 // --- the supply duty (the gatherer) ---------------------------------------------
 
 /** What materials does an active project still want from the world?
- *  Only the gatherable raws: a project may name a crafted thing in
- *  its bill (a chest), and the answer to that is logs delivered to
- *  the site and the owner's craft bench — not a want the gatherer can
- *  carry. */
-const DELIVERABLES = ['oak_log', 'cobblestone', 'oak_sapling', 'wheat_seeds'];
+ *  Only the raws the gatherer can carry — the world's own list, in one
+ *  place (materials.js), the same one the validator approves bills
+ *  against. A bill names raws; the owner crafts the rest at the site. */
+const DELIVERABLES = GATHERABLE_NAMES;
 
 function supplyTarget(board) {
   for (const project of board.list()) {
